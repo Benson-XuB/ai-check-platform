@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI PR Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input, select, textarea { width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #238636; color: white; border: none; border-radius: 6px; }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .comment-item { border: 1px solid #ddd; padding: 0.75rem; margin: 0.5rem 0; border-radius: 4px; }
+    .comment-item.sent { background: #e8f5e9; }
+    .comment-item button { margin-top: 0.5rem; }
+    .severity-critical { border-left: 4px solid #cf222e; }
+    .severity-important { border-left: 4px solid #d4a72c; }
+    .severity-minor { border-left: 4px solid #0969da; }
+    .badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.75rem; margin-right: 0.5rem; }
+    .badge-critical { background: #cf222e; color: white; }
+    .badge-important { background: #d4a72c; color: #1a1a1a; }
+    .badge-minor { background: #0969da; color: white; }
+    #status { margin-top: 1rem; color: #666; }
+    #status.error { color: #c00; }
+    #results { margin-top: 1.5rem; }
+    .filter-bar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .filter-bar label { margin: 0; display: flex; align-items: center; gap: 0.25rem; }
+    .filter-bar input { width: auto; margin: 0; }
+    h1 { color: #333; }
+  </style>
+</head>
+<body>
+  <h1>AI PR Review</h1>
+  <p>选择代码托管平台，填写对应 Token 与 PR 链接，进行上下文感知审查；可将单条意见发回 PR（Gitee / GitHub）。</p>
+  <div>
+    <label>平台</label>
+    <select id="vcsPlatform">
+      <option value="gitee" selected>Gitee</option>
+      <option value="github">GitHub</option>
+    </select>
+    <label id="vcsTokenLabel">Gitee 私人令牌</label>
+    <input type="password" id="vcsToken" placeholder="Gitee 设置 → 私人令牌">
+    <label id="llmKeyLabel">大模型 API Key</label>
+    <input type="password" id="llmKey" placeholder="加载页面后显示说明">
+    <p class="hint" id="llmHint" style="margin-top:0.35rem;">默认使用通义千问；密钥由您自备，本站不提供代充值。自建部署可通过环境变量切换默认厂商。</p>
+    <label>PR 链接</label>
+    <input type="url" id="prUrl" placeholder="https://gitee.com/owner/repo/pulls/123">
+    <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;">
+      <input type="checkbox" id="enrichContext" style="width: auto;">
+      <span>包含测试与 import 相关文件（Python/Vue）</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="useTreesitter" style="width: auto;">
+      <span>Tree-sitter：识别改动类型（注释/逻辑）+ 提取符号（Python）</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="usePyright" style="width: auto;">
+      <span>Pyright：类型/跨文件诊断（仅 Python，非注释改动才触发）</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="useSymbolGraph" style="width: auto;">
+      <span>Symbol Graph（PostgreSQL）：增量索引 caller/callee 并扩展上下文</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="useSemanticContext" style="width: auto;">
+      <span>语义检索（用 diff 检索 Top-5 相关代码片段并入上下文）</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="useDefaultReview" style="width: auto;" checked>
+      <span>默认智能审查（通义下为多 pass + 投票；其他厂商为单次上下文审查，由部署默认 LLM 决定）</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="useMock" style="width: auto;">
+      <span>使用 Mock 审查</span>
+    </label>
+    <button id="btnReview" type="button" disabled>正在加载配置…</button>
+  </div>
+  <div id="status"></div>
+  <div id="results"></div>
+
+  <script>
+    const API = window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
+    window.__llmCfg = {
+      default_llm_provider: "dashscope",
+      llm_key_label: "通义千问 API Key（DashScope）",
+    };
+    window.__llmCfgLoaded = false;
+
+    async function ensurePublicConfig() {
+      if (window.__llmCfgLoaded) return window.__llmCfg;
+      try {
+        const r = await fetch(API + "/api/public-config");
+        if (r.ok) {
+          const j = await r.json();
+          window.__llmCfg = {
+            default_llm_provider: j.default_llm_provider || "dashscope",
+            llm_key_label: j.llm_key_label || "通义千问 API Key",
+          };
+        }
+      } catch (_) {}
+      window.__llmCfgLoaded = true;
+      return window.__llmCfg;
+    }
+
+    const vcsHints = {
+      gitee: { label: "Gitee 私人令牌", tokenPh: "Gitee 设置 → 私人令牌", prPh: "https://gitee.com/owner/repo/pulls/123" },
+      github: { label: "GitHub Token (PAT)", tokenPh: "github.com/settings/tokens（需 repo 读权限）", prPh: "https://github.com/owner/repo/pull/123" },
+    };
+
+    function tokenStorageKey(p) {
+      return "ai-pr-review-vcs-token-" + p;
+    }
+
+    function applyVcsUi() {
+      const p = document.getElementById("vcsPlatform").value;
+      const h = vcsHints[p] || vcsHints.gitee;
+      document.getElementById("vcsTokenLabel").textContent = h.label;
+      document.getElementById("vcsToken").placeholder = h.tokenPh;
+      document.getElementById("prUrl").placeholder = h.prPh;
+    }
+
+    document.getElementById("vcsPlatform").onchange = () => {
+      applyVcsUi();
+      try {
+        const t = localStorage.getItem(tokenStorageKey(document.getElementById("vcsPlatform").value));
+        if (t) document.getElementById("vcsToken").value = t;
+      } catch (_) {}
+    };
+
+    async function apiFetch(url, body) {
+      const r = await fetch(API + url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await r.text();
+        throw new Error("服务器返回非 JSON。请确认后端已运行：uvicorn app.main:app --reload --port 8000");
+      }
+      return r.json();
+    }
+
+    (async function bootPage() {
+      await ensurePublicConfig();
+      document.getElementById("llmKeyLabel").textContent = window.__llmCfg.llm_key_label;
+      document.getElementById("llmKey").placeholder =
+        window.__llmCfg.default_llm_provider === "kimi"
+          ? "月之暗面开放平台 API Key"
+          : "阿里云百炼 / DashScope API Key";
+      try {
+        const plat = localStorage.getItem("ai-pr-review-vcs-platform") || "gitee";
+        document.getElementById("vcsPlatform").value = plat;
+        applyVcsUi();
+        let t = localStorage.getItem(tokenStorageKey(plat));
+        if (!t && plat === "gitee") {
+          t = localStorage.getItem("ai-pr-review-gitee-token");
+          if (t) localStorage.setItem(tokenStorageKey("gitee"), t);
+        }
+        if (t) document.getElementById("vcsToken").value = t;
+        const k = localStorage.getItem("ai-pr-review-llm-key");
+        if (k) document.getElementById("llmKey").value = k;
+      } catch (_) {}
+      const btn = document.getElementById("btnReview");
+      btn.disabled = false;
+      btn.textContent = "开始 Review";
+    })();
+
+    function setStatus(msg, isError) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = isError ? "error" : "";
+    }
+
+    document.getElementById("btnReview").onclick = async () => {
+      await ensurePublicConfig();
+      const cfg = window.__llmCfg;
+      const platform = document.getElementById("vcsPlatform").value;
+      const token = document.getElementById("vcsToken").value.trim();
+      const key = document.getElementById("llmKey").value.trim();
+      const prUrl = document.getElementById("prUrl").value.trim();
+      const useMock = document.getElementById("useMock").checked;
+      const enrichContext = document.getElementById("enrichContext").checked;
+      const useDefaultReview = document.getElementById("useDefaultReview").checked;
+      const useSemanticContext = document.getElementById("useSemanticContext").checked;
+      const useSymbolGraph = document.getElementById("useSymbolGraph").checked;
+      const useTreesitter = document.getElementById("useTreesitter").checked;
+      const usePyright = document.getElementById("usePyright").checked;
+      if (!token || !prUrl) {
+        setStatus("请填写 Token 和 PR 链接", true);
+        return;
+      }
+      if (!useMock && !key) {
+        setStatus("请填写 API Key，或勾选 Mock", true);
+        return;
+      }
+      try {
+        localStorage.setItem("ai-pr-review-vcs-platform", platform);
+        localStorage.setItem(tokenStorageKey(platform), token);
+        localStorage.setItem("ai-pr-review-llm-key", key);
+      } catch (_) {}
+
+      setStatus("正在拉取 PR...");
+      let res1;
+      try {
+        res1 = await apiFetch("/api/vcs/fetch-pr", {
+          platform,
+          pr_url: prUrl,
+          vcs_token: token,
+          enrich_context: enrichContext,
+          use_symbol_graph: useSymbolGraph,
+          use_treesitter: useTreesitter,
+          use_pyright: usePyright,
+        });
+      } catch (e) {
+        setStatus(e.message || "请求失败", true);
+        return;
+      }
+      if (!res1.ok) {
+        setStatus("拉取 PR 失败: " + res1.error, true);
+        return;
+      }
+
+      // 自动 code-RAG 索引（默认审查会用到）
+      if (useDefaultReview && cfg.default_llm_provider === "dashscope") {
+        try {
+          setStatus("正在建立代码索引（Python chunks）...");
+          await apiFetch("/api/rag/index-code-from-pr", {
+            platform,
+            pr_url: prUrl,
+            vcs_token: token,
+            embedding_api_key: key,
+            prefix: "backend/app",
+            max_files: 80,
+          });
+        } catch (_) {
+          // 索引失败不阻塞 review（例如未配置 DATABASE_URL）
+        }
+      }
+
+      setStatus(useMock ? "Mock 审查..." : (useDefaultReview ? "默认智能审查中（覆盖+投票）..." : "正在 AI 审查（含上下文）..."));
+      let res2;
+      try {
+        const reviewBody = {
+          diff: res1.data.diff,
+          pr_title: res1.data.title,
+          pr_body: res1.data.body,
+          file_contexts: res1.data.file_contexts || {},
+          llm_api_key: key,
+          use_mock: useMock,
+          use_default_review: useDefaultReview,
+          default_passes: 8,
+          use_semantic_context: useSemanticContext && !useDefaultReview,
+        };
+        if (useDefaultReview && res1.data.owner && res1.data.repo) {
+          reviewBody.repo_key = res1.data.owner + "/" + res1.data.repo;
+        }
+        if (useDefaultReview && res1.data.head_sha) {
+          reviewBody.ref = res1.data.head_sha;
+        }
+        res2 = await apiFetch("/api/review", reviewBody);
+      } catch (e) {
+        setStatus(e.message || "审查请求失败", true);
+        return;
+      }
+      if (!res2.ok) {
+        setStatus("审查失败: " + res2.error, true);
+        return;
+      }
+
+      const comments = res2.data.comments || [];
+      const container = document.getElementById("results");
+      container.innerHTML = "<h2>Review 结果</h2>";
+      const filterBar = document.createElement("div");
+      filterBar.className = "filter-bar";
+      filterBar.innerHTML = `
+        <label><input type="checkbox" id="filterCritical" checked> Critical</label>
+        <label><input type="checkbox" id="filterImportant" checked> Important</label>
+        <label><input type="checkbox" id="filterMinor" checked> Minor</label>
+      `;
+      container.appendChild(filterBar);
+      const listDiv = document.createElement("div");
+      container.appendChild(listDiv);
+
+      function render() {
+        const showC = document.getElementById("filterCritical").checked;
+        const showI = document.getElementById("filterImportant").checked;
+        const showM = document.getElementById("filterMinor").checked;
+        const filtered = comments.filter(c => {
+          const s = (c.severity || "Minor").toLowerCase();
+          if (s === "critical") return showC;
+          if (s === "important") return showI;
+          return showM;
+        });
+        listDiv.innerHTML = "";
+        filtered.forEach((item, i) => {
+          const origIdx = comments.indexOf(item);
+          const sev = (item.severity || "Minor").toLowerCase();
+          const cat = item.category || "";
+          const div = document.createElement("div");
+          div.className = `comment-item severity-${sev}`;
+          div.innerHTML = `
+            <span class="badge badge-${sev}">${item.severity || "Minor"}</span>
+            ${cat ? `<span class="badge">${cat}</span>` : ""}
+            <strong>${item.file || "(整体)"}${item.line ? " 第 " + item.line + " 行" : ""}</strong><br>
+            <span>${item.suggestion || item.content || ""}</span><br>
+            <button data-i="${origIdx}">发送到 PR</button>
+          `;
+          const btn = div.querySelector("button");
+          btn.onclick = async () => {
+            btn.disabled = true;
+            const body = {
+              platform: res1.data.platform || platform,
+              owner: res1.data.owner,
+              repo: res1.data.repo,
+              number: String(res1.data.number),
+              comment: item.suggestion || item.content,
+              vcs_token: token,
+            };
+            const validPath = item.file && !["(整体)","(未知文件)"].includes(item.file);
+            const validLine = item.line != null && item.line !== "";
+            if (validPath && validLine && res1.data.head_sha) {
+              body.path = item.file;
+              body.line = item.line;
+              body.commit_id = res1.data.head_sha;
+              body.diff = res1.data.diff;
+            }
+            try {
+              const r = await apiFetch("/api/vcs/post-comment", body);
+              if (r.ok) {
+                div.classList.add("sent");
+                btn.textContent = "已发送";
+              } else {
+                setStatus("发送失败: " + r.error, true);
+                btn.disabled = false;
+              }
+            } catch (e) {
+              setStatus(e.message || "发送失败", true);
+              btn.disabled = false;
+            }
+          };
+          listDiv.appendChild(div);
+        });
+      }
+
+      filterBar.querySelectorAll("input[type=checkbox]").forEach(cb => {
+        cb.onchange = render;
+      });
+      render();
+      setStatus("Review 完成，共 " + comments.length + " 条。可按 severity 筛选后发送到 PR。");
+    };
+  </script>
+</body>
+</html>

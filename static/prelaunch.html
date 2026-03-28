@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>上线前检查 — Go / No-Go</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input, select { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
+    button { margin-top: 1.25rem; padding: 0.5rem 1.2rem; background: #0969da; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    #status { margin-top: 1rem; color: #555; white-space: pre-wrap; }
+    #status.err { color: #b00; }
+    a { color: #0969da; }
+    .hint { font-size: 0.85rem; color: #666; margin-top: 0.25rem; }
+    .src-row { margin-top: 1rem; display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: center; }
+    .src-row label { display: inline; font-weight: 600; margin: 0; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>上线前检查</h1>
+  <p>面向小团队：<strong>一眼看能不能发版（Go / No-Go）</strong>，以及必须先改什么。支持 Git HTTPS 克隆或上传源码 ZIP。扫描含 gitleaks、Semgrep、依赖审计、静态配置启发式 + AI 三阶段报告。</p>
+  <p class="hint">需服务端安装对应 CLI，见 <code>GET /api/prelaunch/health</code>。非渗透/合规结论。</p>
+
+  <div class="src-row">
+    <span>来源：</span>
+    <label><input type="radio" name="src" value="git" checked> Git 仓库</label>
+    <label><input type="radio" name="src" value="zip"> 上传 ZIP</label>
+  </div>
+
+  <div id="gitFields">
+    <label>仓库 HTTPS URL</label>
+    <input type="url" id="repoUrl" placeholder="https://github.com/org/repo.git">
+    <label>Git Token（私有库）</label>
+    <input type="password" id="gitToken" placeholder="可选">
+    <label>分支或 Tag（可选）</label>
+    <input type="text" id="ref" placeholder="默认分支">
+  </div>
+
+  <div id="zipFields" class="hidden">
+    <label>源码 ZIP（根目录含 package.json / pyproject 等）</label>
+    <input type="file" id="zipFile" accept=".zip,application/zip">
+    <p class="hint">大小上限见服务端 <code>PRELAUNCH_MAX_REPO_MB</code>。</p>
+  </div>
+
+  <label id="llmKeyLabel">大模型 API Key</label>
+  <input type="password" id="llmKey" placeholder="加载后显示说明">
+  <p class="hint">默认通义千问；密钥自备。部署者可通过 <code>PUBLIC_DEFAULT_LLM_PROVIDER</code> 改为 kimi。</p>
+
+  <button id="btn" type="button" disabled>正在加载配置…</button>
+  <div id="status"></div>
+  <div id="links" style="margin-top:1rem;"></div>
+
+  <script>
+    const API = "";
+    window.__llmCfg = { default_llm_provider: "dashscope", llm_key_label: "通义千问 API Key" };
+    window.__llmCfgLoaded = false;
+    async function ensurePublicConfig() {
+      if (window.__llmCfgLoaded) return window.__llmCfg;
+      try {
+        const r = await fetch(API + "/api/public-config");
+        if (r.ok) {
+          const j = await r.json();
+          window.__llmCfg = {
+            default_llm_provider: j.default_llm_provider || "dashscope",
+            llm_key_label: j.llm_key_label || "通义千问 API Key",
+          };
+        }
+      } catch (_) {}
+      window.__llmCfgLoaded = true;
+      return window.__llmCfg;
+    }
+
+    (async function bootPrelaunch() {
+      await ensurePublicConfig();
+      document.getElementById("llmKeyLabel").textContent = window.__llmCfg.llm_key_label;
+      document.getElementById("llmKey").placeholder =
+        window.__llmCfg.default_llm_provider === "kimi" ? "Kimi API Key" : "DashScope / 通义 API Key";
+      const b = document.getElementById("btn");
+      b.disabled = false;
+      b.textContent = "检查是否可以上线";
+    })();
+
+    function setStatus(msg, isErr) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = isErr ? "err" : "";
+    }
+    document.querySelectorAll('input[name="src"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        const zip = r.value === "zip";
+        document.getElementById("gitFields").classList.toggle("hidden", zip);
+        document.getElementById("zipFields").classList.toggle("hidden", !zip);
+      });
+    });
+
+    async function pollJob(jobId) {
+      setStatus("任务 " + jobId + " 已排队，轮询状态中…");
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(API + "/api/prelaunch/jobs/" + jobId);
+          const j = await r.json();
+          if (!j.ok || !j.data) throw new Error("bad response");
+          const d = j.data;
+          setStatus("状态: " + d.status + (d.error ? "\n\n" + d.error.slice(0, 1500) : ""));
+          if (d.status === "complete") {
+            clearInterval(poll);
+            document.getElementById("btn").disabled = false;
+            const links = document.getElementById("links");
+            links.innerHTML = '<p><a target="_blank" href="' + API + '/api/prelaunch/jobs/' + jobId + '/report">打开 Go/No-Go 报告（HTML）</a></p>';
+            if (d.pdf_ready) {
+              links.innerHTML += '<p><a href="' + API + '/api/prelaunch/jobs/' + jobId + '/report.pdf">下载 PDF</a></p>';
+            } else {
+              links.innerHTML += '<p class="hint">PDF 未生成时可在 HTML 页打印为 PDF。</p>';
+            }
+          }
+          if (d.status === "failed") {
+            clearInterval(poll);
+            document.getElementById("btn").disabled = false;
+          }
+        } catch (e) {
+          clearInterval(poll);
+          setStatus(String(e.message || e), true);
+          document.getElementById("btn").disabled = false;
+        }
+      }, 2000);
+    }
+
+    document.getElementById("btn").onclick = async () => {
+      await ensurePublicConfig();
+      const llm_api_key = document.getElementById("llmKey").value.trim();
+      if (!llm_api_key) {
+        setStatus("请填写 LLM API Key", true);
+        return;
+      }
+      document.getElementById("links").innerHTML = "";
+      setStatus("提交任务…");
+      document.getElementById("btn").disabled = true;
+      const zipMode = document.querySelector('input[name="src"]:checked').value === "zip";
+      try {
+        if (zipMode) {
+          const f = document.getElementById("zipFile").files[0];
+          if (!f) {
+            setStatus("请选择 ZIP 文件", true);
+            document.getElementById("btn").disabled = false;
+            return;
+          }
+          const fd = new FormData();
+          fd.append("file", f);
+          fd.append("llm_api_key", llm_api_key);
+          const r = await fetch(API + "/api/prelaunch/jobs/zip", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.detail || JSON.stringify(j));
+          if (!j.job_id) throw new Error("无 job_id");
+          await pollJob(j.job_id);
+        } else {
+          const repo_url = document.getElementById("repoUrl").value.trim();
+          const git_token = document.getElementById("gitToken").value.trim() || null;
+          const ref = document.getElementById("ref").value.trim() || null;
+          if (!repo_url) {
+            setStatus("请填写仓库 URL", true);
+            document.getElementById("btn").disabled = false;
+            return;
+          }
+          const r = await fetch(API + "/api/prelaunch/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repo_url, git_token, ref, llm_api_key }),
+          });
+          const j = await r.json();
+          if (!j.ok && j.detail) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+          if (!j.job_id) throw new Error(j.error || "无 job_id");
+          await pollJob(j.job_id);
+        }
+      } catch (e) {
+        setStatus(String(e.message || e), true);
+        document.getElementById("btn").disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

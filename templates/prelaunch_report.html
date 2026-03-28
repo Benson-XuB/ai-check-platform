@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>上线前检查 — {{ record.repo_url_display }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.35rem; }
+    h2 { margin-top: 2rem; font-size: 1.1rem; border-bottom: 1px solid #ddd; padding-bottom: 0.25rem; }
+    h3 { margin-top: 1rem; font-size: 1rem; color: #333; }
+    .meta { color: #666; font-size: 0.9rem; }
+    .disclaimer { background: #fff8e6; border: 1px solid #e6c200; padding: 0.75rem; margin: 1rem 0; font-size: 0.85rem; }
+    .dim { background: #f8f9fa; border-left: 3px solid #0969da; padding: 0.75rem; margin: 0.75rem 0; font-size: 0.88rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left; vertical-align: top; }
+    th { background: #f5f5f5; }
+    tr.Critical { background: #ffe4e4; }
+    tr.High { background: #fff3cd; }
+    .sev { font-weight: 600; }
+    pre.llm-md { white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; background: #fafafa; padding: 0.75rem; border-radius: 4px; }
+    ul.checklist { list-style: none; padding: 0; }
+    ul.checklist li { margin: 0.35rem 0; }
+    ul.hintlist { margin: 0.25rem 0; padding-left: 1.2rem; }
+    details.mvp-mod { margin: 0.75rem 0; border: 1px solid #e1e4e8; border-radius: 6px; padding: 0.5rem 0.75rem; }
+    details.mvp-mod summary { cursor: pointer; font-weight: 600; }
+    .bucket { font-size: 0.75rem; color: #444; }
+    .verdict-go { background: #e6ffed; border: 1px solid #28a745; padding: 1rem; margin: 1rem 0; border-radius: 6px; }
+    .verdict-nogo { background: #ffeef0; border: 1px solid #d73a49; padding: 1rem; margin: 1rem 0; border-radius: 6px; }
+    .verdict-unknown { background: #f0f3f6; border: 1px solid #959da5; padding: 1rem; margin: 1rem 0; border-radius: 6px; }
+    .verdict-go h2, .verdict-nogo h2, .verdict-unknown h2 { margin: 0 0 0.5rem 0; font-size: 1.15rem; border: none; }
+  </style>
+</head>
+<body>
+  <h1>上线前 Go / No-Go 检查报告</h1>
+  <p class="meta">来源：{{ record.repo_url_display }} &nbsp;|&nbsp; 任务：{{ record.job_id }} &nbsp;|&nbsp; 分支/Tag：{{ record.ref or "—" }} &nbsp;|&nbsp; 生成：{{ record.updated_at }}</p>
+  <div class="disclaimer">
+    <strong>免责声明：</strong>本报告由自动化扫描与生成式 AI 辅助生成，用于小团队<strong>自查参考</strong>，不构成渗透测试、等保/合规或法律意见。存在误报可能；发布前请人工确认。
+  </div>
+
+  {# —— 1. 结论（置顶） —— #}
+  {% if llm.verdict %}
+  <div class="{% if llm.verdict == 'go' %}verdict-go{% elif llm.verdict == 'no_go' %}verdict-nogo{% else %}verdict-unknown{% endif %}">
+    <h2>{% if llm.verdict == 'go' %}✅{% elif llm.verdict == 'no_go' %}🚫{% else %}❔{% endif %} {{ llm.verdict_display or llm.verdict }}</h2>
+    {% if llm.verdict == 'go' and llm.optimize_suggestions %}
+    <p><strong>建议优化（非阻断）</strong></p>
+    <ul class="hintlist">{% for x in llm.optimize_suggestions %}<li>{{ x }}</li>{% endfor %}</ul>
+    {% elif llm.verdict_reasons %}
+    <p><strong>原因</strong></p>
+    <ul class="hintlist">{% for x in llm.verdict_reasons %}<li>{{ x }}</li>{% endfor %}</ul>
+    {% elif llm.verdict == 'no_go' and llm.must_fix_before_launch %}
+    <p><strong>原因</strong>（摘自必须修复项）</p>
+    <ul class="hintlist">{% for x in llm.must_fix_before_launch[:3] %}<li>{{ x }}</li>{% endfor %}</ul>
+    {% endif %}
+    <p class="meta">Top 风险与详细说明见下文；「必须修 / 可延后」见第 4 节。</p>
+  </div>
+  {% endif %}
+
+  {# —— 2. Top 3 —— #}
+  <h2>2. 最重要的 3 个问题（Top Risks）</h2>
+  <ol>
+    {% for r in llm.top_risks[:3] %}
+    <li>{{ r }}</li>
+    {% else %}
+    <li class="meta">（无）</li>
+    {% endfor %}
+  </ol>
+
+  {# —— 3. 详细报告（可折叠） —— #}
+  <h2>3. 详细报告（按模块，可折叠）</h2>
+  <p class="meta">扫描统计：安全 {{ mvp_counts.security }} · 配置 {{ mvp_counts.config }} · 依赖 {{ mvp_counts.dependency }} · 可用性 {{ mvp_counts.availability }} · 其他 {{ mvp_counts.other }}</p>
+
+  {% macro finding_table(rows) %}
+  {% if rows %}
+  <table>
+    <thead><tr><th>严重</th><th>MVP</th><th>标题</th><th>文件</th><th>行</th><th>来源</th></tr></thead>
+    <tbody>
+      {% for f in rows %}
+      <tr class="{{ f.severity }}">
+        <td class="sev">{{ f.severity }}</td>
+        <td class="bucket">{{ f.mvp_bucket or "—" }}</td>
+        <td>{{ f.title }}</td>
+        <td><code>{{ f.file }}</code></td>
+        <td>{{ f.line }}</td>
+        <td>{{ f.sources | join(", ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="meta">（本模块无扫描命中）</p>{% endif %}
+  {% endmacro %}
+
+  <details class="mvp-mod" open>
+    <summary>安全（密钥 + 静态代码）</summary>
+    {{ finding_table(findings_mvp.security) }}
+    {% if llm.detail_security %}<h4>AI 说明与修复思路</h4><pre class="llm-md">{{ llm.detail_security }}</pre>{% endif %}
+  </details>
+  <details class="mvp-mod">
+    <summary>环境 &amp; 配置</summary>
+    {{ finding_table(findings_mvp.config) }}
+    {% if llm.detail_config %}<h4>AI 说明与修复思路</h4><pre class="llm-md">{{ llm.detail_config }}</pre>{% endif %}
+  </details>
+  <details class="mvp-mod">
+    <summary>依赖与漏洞</summary>
+    {{ finding_table(findings_mvp.dependency) }}
+    {% if llm.detail_dependency %}<h4>AI 说明与修复思路</h4><pre class="llm-md">{{ llm.detail_dependency }}</pre>{% endif %}
+  </details>
+  <details class="mvp-mod">
+    <summary>可用性（轻量信号）</summary>
+    {{ finding_table(findings_mvp.availability) }}
+    {% if llm.detail_availability %}<h4>AI 说明与修复思路</h4><pre class="llm-md">{{ llm.detail_availability }}</pre>{% endif %}
+  </details>
+  {% if findings_mvp.other %}
+  <details class="mvp-mod">
+    <summary>其他</summary>
+    {{ finding_table(findings_mvp.other) }}
+  </details>
+  {% endif %}
+
+  {# —— 4. 上线建议 —— #}
+  <h2>4. 上线建议（决策辅助）</h2>
+  {% if llm.must_fix_before_launch %}
+  <p><strong>必须修复后上线</strong></p>
+  <ul class="hintlist">{% for x in llm.must_fix_before_launch %}<li>{{ x }}</li>{% endfor %}</ul>
+  {% else %}<p class="meta">（裁判未列出单独「必须修」项，请以 Top 风险与上表为准）</p>{% endif %}
+  {% if llm.fix_after_launch %}
+  <p><strong>可以上线后优化</strong></p>
+  <ul class="hintlist">{% for x in llm.fix_after_launch %}<li>{{ x }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if llm.non_critical_notes %}
+  <p><strong>非关键 / 低优先级（扫描归类为 info）</strong></p>
+  <ul class="hintlist">{% for x in llm.non_critical_notes %}<li>{{ x }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <h2>5. 仓库与栈</h2>
+  <p class="meta">技术栈：{{ profile_hints.stacks | join("、") or "（未明确）" }} &nbsp;|&nbsp; 包管理：{{ profile_hints.package_managers | join(", ") }} / 锁文件：{{ profile_hints.lockfiles | join(", ") or "无" }}</p>
+  {% if profile_hints.java_notes %}
+  <div class="dim"><strong>Java / 构建</strong><ul class="hintlist">{% for line in profile_hints.java_notes %}<li>{{ line }}</li>{% endfor %}</ul></div>
+  {% endif %}
+
+  <h2>6. 执行摘要（AI 全文）</h2>
+  <pre class="llm-md">{{ llm.executive_summary or "（无）" }}</pre>
+
+  <h2>7. 逐条说明与修复建议（AI 节选）</h2>
+  {% for fid, note in llm.finding_notes.items() %}
+  <p><strong>{{ fid }}</strong></p>
+  <ul>
+    <li>说明：{{ note.explanation }}</li>
+    <li>修复：{{ note.fix }}</li>
+    {% if note.false_positive_hint %}<li>误报提示：{{ note.false_positive_hint }}</li>{% endif %}
+  </ul>
+  {% else %}<p class="meta">（无）</p>{% endfor %}
+
+  {% if llm.architecture_section and not (llm.detail_security or llm.detail_config) %}
+  <h2>8. 补充说明</h2>
+  <pre class="llm-md">{{ llm.architecture_section }}</pre>
+  {% endif %}
+
+  <h2>9. 发布 Checklist（AI 生成，易遗漏项）</h2>
+  <ul class="checklist">
+    {% for item in llm.compliance_checklist %}
+    <li>□ {{ item.item }} {% if item.done is not none %}(自报: {{ item.done }}){% endif %}</li>
+    {% else %}
+    <li class="meta">（无）</li>
+    {% endfor %}
+  </ul>
+
+  <h2>10. 全量发现列表</h2>
+  <table>
+    <thead><tr><th>严重</th><th>类别</th><th>MVP</th><th>标题</th><th>文件</th><th>行</th><th>来源</th></tr></thead>
+    <tbody>
+      {% for f in findings %}
+      <tr class="{{ f.severity }}">
+        <td class="sev">{{ f.severity }}</td>
+        <td>{{ f.category }}</td>
+        <td class="bucket">{{ f.mvp_bucket or "—" }}</td>
+        <td>{{ f.title }}</td>
+        <td><code>{{ f.file }}</code></td>
+        <td>{{ f.line }}</td>
+        <td>{{ f.sources | join(", ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

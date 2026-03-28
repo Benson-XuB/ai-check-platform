@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI PR Review - Gitee + Kimi</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input, textarea { width: 100%; padding: 0.5rem; margin-top: 0.25rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #238636; color: white; border: none; border-radius: 6px; }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .comment-item { border: 1px solid #ddd; padding: 0.75rem; margin: 0.5rem 0; border-radius: 4px; }
+    .comment-item.sent { background: #e8f5e9; }
+    .comment-item button { margin-top: 0.5rem; }
+    #status { margin-top: 1rem; color: #666; }
+    #status.error { color: #c00; }
+    #results { margin-top: 1.5rem; }
+    h1 { color: #333; }
+  </style>
+</head>
+<body>
+  <h1>AI PR Review</h1>
+  <p>输入 Gitee PR 链接，使用 Kimi 进行代码审查，选择合理评论后发送到 PR。</p>
+  <div>
+    <label>Gitee Token</label>
+    <input type="password" id="giteeToken" placeholder="从 Gitee 设置 → 私人令牌 获取">
+    <label>Kimi API Key</label>
+    <input type="password" id="kimiKey" placeholder="从 月之暗面 开放平台获取">
+    <label>PR 链接</label>
+    <input type="url" id="prUrl" placeholder="https://gitee.com/owner/repo/pulls/123">
+    <button id="btnReview">开始 Review</button>
+  </div>
+  <div id="status"></div>
+  <div id="results"></div>
+
+  <script>
+    const API = "";
+    (function loadSaved() {
+      try {
+        const t = localStorage.getItem("ai-pr-review-gitee-token");
+        const k = localStorage.getItem("ai-pr-review-kimi-key");
+        if (t) document.getElementById("giteeToken").value = t;
+        if (k) document.getElementById("kimiKey").value = k;
+      } catch (_) {}
+    })();
+    function setStatus(msg, isError) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = isError ? "error" : "";
+    }
+    function parseReview(text) {
+      const items = [];
+      const blocks = text.split(/##\s*文件:/);
+      for (let i = 1; i < blocks.length; i++) {
+        const [firstLine, ...rest] = blocks[i].trim().split("\n");
+        const curFile = firstLine.replace(/^:\s*/, "").trim();
+        const block = rest.join("\n");
+        const lineMatches = [...block.matchAll(/###\s*第\s*(\d+)\s*行\s*\n([\s\S]*?)(?=###|##|$)/g)];
+        for (const lm of lineMatches) {
+          const line = lm[1];
+          const content = lm[2].trim().replace(/^-\s*\[[^\]]+\]\s*/, "");
+          items.push({ file: curFile, line, content });
+        }
+      }
+      if (items.length === 0) items.push({ file: "", line: "", content: text });
+      return items;
+    }
+    document.getElementById("btnReview").onclick = async () => {
+      const token = document.getElementById("giteeToken").value.trim();
+      const key = document.getElementById("kimiKey").value.trim();
+      const prUrl = document.getElementById("prUrl").value.trim();
+      if (!token || !key || !prUrl) {
+        setStatus("请填写 Token、API Key 和 PR 链接", true);
+        return;
+      }
+      try {
+        localStorage.setItem("ai-pr-review-gitee-token", token);
+        localStorage.setItem("ai-pr-review-kimi-key", key);
+      } catch (_) {}
+      setStatus("正在拉取 PR...");
+      const res1 = await fetch(API + "/api/gitee/fetch-pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pr_url: prUrl, gitee_token: token }),
+      }).then(r => r.json());
+      if (!res1.ok) {
+        setStatus("拉取 PR 失败: " + res1.error, true);
+        return;
+      }
+      setStatus("正在调用 Kimi 审查...");
+      const res2 = await fetch(API + "/api/kimi/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ diff: res1.data.diff, kimi_api_key: key }),
+      }).then(r => r.json());
+      if (!res2.ok) {
+        setStatus("Kimi 审查失败: " + res2.error, true);
+        return;
+      }
+      const items = parseReview(res2.data.review);
+      const container = document.getElementById("results");
+      container.innerHTML = "<h2>Review 结果</h2>";
+      items.forEach((item, i) => {
+        const div = document.createElement("div");
+        div.className = "comment-item";
+        div.innerHTML = `
+          <strong>${item.file || "(整体)"}${item.line ? " 第 " + item.line + " 行" : ""}</strong><br>
+          <span>${item.content}</span><br>
+          <button data-i="${i}">发送到 PR</button>
+        `;
+        const btn = div.querySelector("button");
+        btn.onclick = async () => {
+          btn.disabled = true;
+          const r = await fetch(API + "/api/gitee/post-comment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              owner: res1.data.owner,
+              repo: res1.data.repo,
+              number: res1.data.number,
+              comment: item.content,
+              gitee_token: token,
+            }),
+          }).then(x => x.json());
+          if (r.ok) {
+            div.classList.add("sent");
+            btn.textContent = "已发送";
+          } else {
+            setStatus("发送失败: " + r.error, true);
+            btn.disabled = false;
+          }
+        };
+        container.appendChild(div);
+      });
+      setStatus("Review 完成，共 " + items.length + " 条。可点击「发送到 PR」将评论同步到 Gitee。");
+    };
+  </script>
+</body>
+</html>

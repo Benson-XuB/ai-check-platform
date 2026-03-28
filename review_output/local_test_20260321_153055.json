@@ -1,0 +1,152 @@
+{
+  "meta": {
+    "test_type": "local_resumehub",
+    "timestamp": "2026-03-21T15:30:55.185409"
+  },
+  "summary": {
+    "total_comments": 17,
+    "by_severity": {
+      "Critical": 12,
+      "Important": 5
+    },
+    "by_category": {
+      "逻辑正确性": 2,
+      "边界条件": 1,
+      "错误处理": 1,
+      "外部调用": 1,
+      "SQL 注入风险": 1,
+      "敏感信息暴露": 1,
+      "输入校验不足": 1,
+      "错误信息泄露": 1,
+      "Code Quality,未校验的 API 调用": 1,
+      "Code Quality,Security": 1,
+      "依赖与并发 - 并发安全,Security": 1,
+      "Input Validation": 1,
+      "Error Handling": 1,
+      "Code Quality,依赖与并发 - 幻觉 API": 1,
+      "依赖与并发 - 数据契约匹配": 1,
+      "依赖与并发 - 并发安全": 1
+    }
+  },
+  "comments": [
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 14,
+      "severity": "Critical",
+      "category": "逻辑正确性",
+      "suggestion": "SQL 注入风险：直接拼接用户输入到 SQL 语句中，应使用参数化查询或 ORM 方法防止 SQL 注入"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 25,
+      "severity": "Critical",
+      "category": "边界条件",
+      "suggestion": "缺少对 candidate_ids 的空值和格式校验，可能导致 ValueError 或 SQL 注入风险"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 36,
+      "severity": "Critical",
+      "category": "逻辑正确性",
+      "suggestion": "未检查 c 是否为 None，可能导致 AttributeError。应添加空值判断"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 47,
+      "severity": "Critical",
+      "category": "错误处理",
+      "suggestion": "异常信息直接返回给客户端，可能泄露内部实现细节。应统一处理异常并返回通用错误信息"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 50,
+      "severity": "Critical",
+      "category": "外部调用",
+      "suggestion": "调用不存在的 fake_analytics.aggregate API，应验证该 API 是否存在或移除该代码"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 19,
+      "severity": "Critical",
+      "category": "SQL 注入风险",
+      "suggestion": "使用参数化查询代替字符串拼接构建 SQL 语句，避免 SQL 注入攻击。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 12,
+      "severity": "Critical",
+      "category": "敏感信息暴露",
+      "suggestion": "硬编码 API 密钥（API_SECRET）应通过环境变量或配置管理工具注入，避免明文暴露。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 30,
+      "severity": "Important",
+      "category": "输入校验不足",
+      "suggestion": "对 candidate_ids 参数进行空值和长度检查，防止异常输入导致错误或安全问题。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 46,
+      "severity": "Important",
+      "category": "错误信息泄露",
+      "suggestion": "避免将异常的详细信息直接返回给客户端，应记录日志并返回通用错误信息。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 57,
+      "severity": "Critical",
+      "category": "Code Quality,未校验的 API 调用",
+      "suggestion": "调用不存在的 API：fake_analytics.aggregate 是虚构的，应移除或实现该功能\n调用不存在的 fake_analytics.aggregate 接口可能导致运行时错误，应验证接口是否存在或移除该代码。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 13,
+      "severity": "Critical",
+      "category": "Code Quality,Security",
+      "suggestion": "存在 SQL 注入风险：用户输入直接拼接进 SQL 语句，应使用参数化查询或 ORM 方法替代\n文件注释中提到的测试用代码应明确标注，且不应出现在生产代码路径中"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 26,
+      "severity": "Critical",
+      "category": "依赖与并发 - 并发安全,Security",
+      "suggestion": "SQL 注入风险：直接拼接用户输入到 SQL 语句中，可能导致恶意注入。建议使用参数化查询或 ORM 方法替代字符串拼接。\n硬编码密钥（API_SECRET）应使用环境变量替代，避免暴露敏感信息"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 35,
+      "severity": "Important",
+      "category": "Input Validation",
+      "suggestion": "缺少对 candidate_ids 的边界检查，可能为空或超长，应添加验证逻辑"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 48,
+      "severity": "Critical",
+      "category": "Error Handling",
+      "suggestion": "错误信息泄露实现细节：异常 detail 直接返回给客户端，应使用通用错误信息"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 43,
+      "severity": "Critical",
+      "category": "Code Quality,依赖与并发 - 幻觉 API",
+      "suggestion": "调用不存在的 fake_analytics.aggregate 模块，属于幻觉 API。应移除该依赖或替换为真实存在的库/服务。\n未处理 c 可能为 None 的情况，可能导致 AttributeError，应添加空值检查"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 37,
+      "severity": "Important",
+      "category": "依赖与并发 - 数据契约匹配",
+      "suggestion": "未对 candidate_ids 进行空值或边界检查，可能导致异常或性能问题。建议添加校验逻辑，例如检查为空或长度过长的情况。"
+    },
+    {
+      "file": "backend/app/routers/candidates_risky.py",
+      "line": 41,
+      "severity": "Important",
+      "category": "依赖与并发 - 并发安全",
+      "suggestion": "在 batch_update 中未处理 c 可能为 None 的情况，可能导致 AttributeError。建议添加空值判断，例如 if c: c.stage = ..."
+    }
+  ]
+}

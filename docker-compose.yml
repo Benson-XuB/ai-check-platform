@@ -1,0 +1,22 @@
+# 一键：docker compose up --build -d
+# 在项目根目录放置 .env（可复制 .env.example），Compose 会自动读入并传入容器
+
+services:
+  ai-pr-review:
+    build: .
+    image: ai-pr-review:latest
+    container_name: ai-pr-review
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      GITEE_TOKEN: ${GITEE_TOKEN:-}
+      GITEE_WEBHOOK_SECRET: ${GITEE_WEBHOOK_SECRET:-}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      WEBHOOK_LLM_PROVIDER: ${WEBHOOK_LLM_PROVIDER:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      # 容器内默认可写路径；持久化可改为挂载宿主机目录并同步修改 PRELAUNCH_WORKSPACE
+      PRELAUNCH_WORKSPACE: ${PRELAUNCH_WORKSPACE:-/tmp/prelaunch}
+    restart: unless-stopped

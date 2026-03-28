@@ -1,0 +1,22 @@
+id,file,line,severity,category,suggestion,human_caught
+0,backend/app/routers/candidates_risky.py,14,Critical,逻辑正确性,SQL 注入风险：直接拼接用户输入到 SQL 语句中，应使用参数化查询或 ORM 方法防止 SQL 注入,
+1,backend/app/routers/candidates_risky.py,25,Critical,边界条件,缺少对 candidate_ids 的空值和格式校验，可能导致 ValueError 或 SQL 注入风险,
+2,backend/app/routers/candidates_risky.py,36,Critical,逻辑正确性,未检查 c 是否为 None，可能导致 AttributeError。应添加空值判断,
+3,backend/app/routers/candidates_risky.py,47,Critical,错误处理,异常信息直接返回给客户端，可能泄露内部实现细节。应统一处理异常并返回通用错误信息,
+4,backend/app/routers/candidates_risky.py,50,Critical,外部调用,调用不存在的 fake_analytics.aggregate API，应验证该 API 是否存在或移除该代码,
+5,backend/app/routers/candidates_risky.py,19,Critical,SQL 注入风险,使用参数化查询代替字符串拼接构建 SQL 语句，避免 SQL 注入攻击。,
+6,backend/app/routers/candidates_risky.py,12,Critical,敏感信息暴露,硬编码 API 密钥（API_SECRET）应通过环境变量或配置管理工具注入，避免明文暴露。,
+7,backend/app/routers/candidates_risky.py,30,Important,输入校验不足,对 candidate_ids 参数进行空值和长度检查，防止异常输入导致错误或安全问题。,
+8,backend/app/routers/candidates_risky.py,46,Important,错误信息泄露,避免将异常的详细信息直接返回给客户端，应记录日志并返回通用错误信息。,
+9,backend/app/routers/candidates_risky.py,57,Critical,"Code Quality,未校验的 API 调用","调用不存在的 API：fake_analytics.aggregate 是虚构的，应移除或实现该功能
+调用不存在的 fake_analytics.aggregate 接口可能导致运行时错误，应验证接口是否存在或移除该代码。",
+10,backend/app/routers/candidates_risky.py,13,Critical,"Code Quality,Security","存在 SQL 注入风险：用户输入直接拼接进 SQL 语句，应使用参数化查询或 ORM 方法替代
+文件注释中提到的测试用代码应明确标注，且不应出现在生产代码路径中",
+11,backend/app/routers/candidates_risky.py,26,Critical,"依赖与并发 - 并发安全,Security","SQL 注入风险：直接拼接用户输入到 SQL 语句中，可能导致恶意注入。建议使用参数化查询或 ORM 方法替代字符串拼接。
+硬编码密钥（API_SECRET）应使用环境变量替代，避免暴露敏感信息",
+12,backend/app/routers/candidates_risky.py,35,Important,Input Validation,缺少对 candidate_ids 的边界检查，可能为空或超长，应添加验证逻辑,
+13,backend/app/routers/candidates_risky.py,48,Critical,Error Handling,错误信息泄露实现细节：异常 detail 直接返回给客户端，应使用通用错误信息,
+14,backend/app/routers/candidates_risky.py,43,Critical,"Code Quality,依赖与并发 - 幻觉 API","调用不存在的 fake_analytics.aggregate 模块，属于幻觉 API。应移除该依赖或替换为真实存在的库/服务。
+未处理 c 可能为 None 的情况，可能导致 AttributeError，应添加空值检查",
+15,backend/app/routers/candidates_risky.py,37,Important,依赖与并发 - 数据契约匹配,未对 candidate_ids 进行空值或边界检查，可能导致异常或性能问题。建议添加校验逻辑，例如检查为空或长度过长的情况。,
+16,backend/app/routers/candidates_risky.py,41,Important,依赖与并发 - 并发安全,在 batch_update 中未处理 c 可能为 None 的情况，可能导致 AttributeError。建议添加空值判断，例如 if c: c.stage = ...,
