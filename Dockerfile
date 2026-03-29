@@ -1,4 +1,5 @@
 # AI PR Review — 构建镜像即完成依赖安装，无需在容器内手动 pip
+# Trivy：直链 tar.gz（勿用 install.sh；见 TRVY_VERSION 与 curl github releases）
 FROM python:3.11-slim
 
 WORKDIR /app
