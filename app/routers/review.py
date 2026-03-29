@@ -53,11 +53,11 @@ MOCK_COMMENTS = [
 ]
 
 
-@router.post("/review")
-def review(request: Request, req: ReviewRequest):
-    """统一审查入口：默认厂商由站点 PUBLIC_DEFAULT_LLM_PROVIDER 决定（默认通义）。"""
-    if not req.use_mock:
-        enforce_review_llm(request)
+def run_review_core(req: ReviewRequest) -> dict:
+    """
+    执行审查逻辑；供 Webhook、SaaS 后台任务调用。
+    HTTP 入口请使用 review()，以便限流与审计。
+    """
     if req.use_mock:
         return {"ok": True, "data": {"comments": MOCK_COMMENTS}}
     if not req.diff:
@@ -132,3 +132,11 @@ def review(request: Request, req: ReviewRequest):
         return {"ok": True, "data": {"comments": comments}}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/review")
+def review(request: Request, req: ReviewRequest):
+    """统一审查入口：默认厂商由站点 PUBLIC_DEFAULT_LLM_PROVIDER 决定（默认通义）。"""
+    if not req.use_mock:
+        enforce_review_llm(request)
+    return run_review_core(req)

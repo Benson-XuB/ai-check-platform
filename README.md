@@ -12,7 +12,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-访问 http://127.0.0.1:8000
+访问 http://127.0.0.1:8000（首页为 **Gitee / GitHub 登录入口**；自备 Key 与 PR 链接的表单在 `/manual`）
 
 **公网部署**：务必 **HTTPS**；建议设 `PRELAUNCH_TRUST_X_FORWARDED_FOR=1`（或 `PUBLIC_TRUST_X_FORWARDED_FOR`）以便在反代后按真实 IP 限流。限流项见 `.env.example`（PR 拉取、LLM 审查、评论、RAG、Prelaunch 各自独立计数）。`HTTP_MAX_BODY_MB` 限制大 JSON（如超大 diff）；ZIP 上限为 `PRELAUNCH_MAX_REPO_MB`。
 
@@ -22,6 +22,26 @@ uvicorn app.main:app --reload --port 8000
 - **AI 审查**：默认 **Kimi**，可切换通义千问；基于上下文进行审查（多 pass 智能审查仅通义）
 - **结构化输出**：severity (Critical/Important/Minor) + category
 - **行级评论**：可将审查结果精准发送到 PR 对应行
+- **Gitee 登录与自动报告**：见下文「Gitee SaaS」；合并请求 WebHook 触发后只写入站内报告，**默认不向 PR 发评论**，LLM 使用服务端配置的 Key。
+
+## Gitee SaaS（OAuth + 自动审查报告）
+
+- 入口：<http://127.0.0.1:8000/app>
+- 流程：**Gitee OAuth 登录** → 点击 **同步 WebHook**（对当前令牌下有权限的仓库调用 Gitee API 注册合并请求 Hook）→ 新建/更新合并请求时自动拉取并审查 → 结果保存在 **`pr_review_reports` 表**，在 `/app` 查看；**不写回 Gitee 评论**。
+- 审查使用的 LLM 与密钥：与全站一致，读环境变量 **`DASHSCOPE_API_KEY`** 或 **`KIMI_API_KEY`**（由 `PUBLIC_DEFAULT_LLM_PROVIDER` 决定），用户无需自带 Key。
+- **必须**配置 **`DATABASE_URL`**（与 RAG / Symbol Graph 共用同一库即可）；并创建 Gitee 第三方应用（回调 URL 与下方 `GITEE_OAUTH_REDIRECT_URI` 完全一致）。
+
+| 环境变量 | 说明 |
+|----------|------|
+| `GITEE_OAUTH_CLIENT_ID` / `GITEE_OAUTH_CLIENT_SECRET` | Gitee OAuth 应用凭据 |
+| `GITEE_OAUTH_REDIRECT_URI` | 回调地址，如 `http://127.0.0.1:8000/auth/gitee/callback` |
+| `GITEE_OAUTH_SCOPES` | 可选；默认 `user_info pull_requests projects hook`（`hook` 用于 API 注册 WebHook） |
+| `PUBLIC_BASE_URL` | 站点根 URL，用于拼接 WebHook 地址 |
+| `GITEE_WEBHOOK_SECRET` | 与 Gitee WebHook「密码」一致，用于 `X-Gitee-Token` 校验 |
+| `SESSION_SECRET` | 会话 Cookie 签名（生产请使用强随机值） |
+| `SESSION_HTTPS_ONLY` | 生产环境 HTTPS 下设为 `1` |
+
+可选（默认偏省资源）：`SAAS_WEBHOOK_ENRICH_CONTEXT`、`SAAS_WEBHOOK_USE_SYMBOL_GRAPH`、`SAAS_WEBHOOK_USE_TREESITTER`、`SAAS_WEBHOOK_USE_PYRIGHT`、`SAAS_WEBHOOK_USE_SEMANTIC_CONTEXT`、`SAAS_WEBHOOK_USE_DEFAULT_REVIEW`、`SAAS_WEBHOOK_DEFAULT_PASSES`。
 
 ## 配置
 

@@ -1,0 +1,472 @@
+"""Gitee SaaS：OAuth、仓库 WebHook 注册、按用户写审查报告（平台 LLM Key）。"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+from urllib.parse import quote, urlencode
+
+import httpx
+
+from app.routers.gitee import FetchPRRequest, run_fetch_pr
+from app.routers.review import ReviewRequest, run_review_core
+from app.services import gitee_webhook as wh_svc
+from app.services.llm_defaults import get_public_default_llm_provider
+from app.storage.db import create_db_engine
+from app.storage.models import AppUser, GiteeOAuthAccount, GiteeWatchedRepo, PrReviewReport
+
+logger = logging.getLogger(__name__)
+
+GITEE_OAUTH_AUTHORIZE = "https://gitee.com/oauth/authorize"
+GITEE_OAUTH_TOKEN = "https://gitee.com/oauth/token"
+GITEE_API = "https://gitee.com/api/v5"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def oauth_config_ok() -> bool:
+    return bool(
+        os.getenv("GITEE_OAUTH_CLIENT_ID", "").strip()
+        and os.getenv("GITEE_OAUTH_CLIENT_SECRET", "").strip()
+        and os.getenv("GITEE_OAUTH_REDIRECT_URI", "").strip()
+    )
+
+
+def public_base_url() -> str:
+    return os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def gitee_oauth_authorize_url(state: str) -> str:
+    cid = os.getenv("GITEE_OAUTH_CLIENT_ID", "").strip()
+    redir = os.getenv("GITEE_OAUTH_REDIRECT_URI", "").strip()
+    scope = os.getenv(
+        "GITEE_OAUTH_SCOPES",
+        "user_info pull_requests projects hook",
+    ).strip()
+    q = urlencode(
+        {
+            "client_id": cid,
+            "redirect_uri": redir,
+            "response_type": "code",
+            "scope": scope,
+            "state": state,
+        }
+    )
+    return f"{GITEE_OAUTH_AUTHORIZE}?{q}"
+
+
+def exchange_code_for_token(code: str) -> dict[str, Any]:
+    cid = os.getenv("GITEE_OAUTH_CLIENT_ID", "").strip()
+    sec = os.getenv("GITEE_OAUTH_CLIENT_SECRET", "").strip()
+    redir = os.getenv("GITEE_OAUTH_REDIRECT_URI", "").strip()
+    with httpx.Client(timeout=30) as client:
+        r = client.post(
+            GITEE_OAUTH_TOKEN,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": cid,
+                "client_secret": sec,
+                "redirect_uri": redir,
+            },
+            headers={"Accept": "application/json"},
+        )
+    if r.status_code != 200:
+        logger.warning("Gitee token exchange failed: %s %s", r.status_code, r.text[:300])
+        raise RuntimeError(f"Gitee OAuth 换 token 失败: HTTP {r.status_code}")
+    return r.json()
+
+
+def fetch_gitee_user(access_token: str) -> dict[str, Any]:
+    with httpx.Client(timeout=30) as client:
+        r = client.get(
+            f"{GITEE_API}/user",
+            params={"access_token": access_token},
+        )
+    if r.status_code != 200:
+        raise RuntimeError(f"读取 Gitee 用户失败: HTTP {r.status_code}")
+    return r.json()
+
+
+def split_path_with_namespace(path_with_namespace: str) -> tuple[str, str]:
+    parts = path_with_namespace.strip().strip("/").split("/")
+    if len(parts) < 2:
+        raise ValueError(f"无效 path_with_namespace: {path_with_namespace}")
+    repo = parts[-1]
+    owner = "/".join(parts[:-1])
+    return owner, repo
+
+
+def list_user_repos(access_token: str, *, page: int = 1, per_page: int = 100) -> list[dict[str, Any]]:
+    with httpx.Client(timeout=60) as client:
+        r = client.get(
+            f"{GITEE_API}/user/repos",
+            params={
+                "access_token": access_token,
+                "page": page,
+                "per_page": per_page,
+                "sort": "updated",
+            },
+        )
+    if r.status_code != 200:
+        logger.warning("list repos failed: %s %s", r.status_code, r.text[:200])
+        return []
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
+def list_repo_hooks(access_token: str, owner: str, repo: str) -> list[dict[str, Any]]:
+    eo, er = quote(owner, safe=""), quote(repo, safe="")
+    with httpx.Client(timeout=30) as client:
+        r = client.get(
+            f"{GITEE_API}/repos/{eo}/{er}/hooks",
+            params={"access_token": access_token, "page": 1, "per_page": 50},
+        )
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
+def create_repo_hook(
+    access_token: str,
+    owner: str,
+    repo: str,
+    *,
+    url: str,
+    password: str,
+) -> Optional[dict[str, Any]]:
+    eo, er = quote(owner, safe=""), quote(repo, safe="")
+    body = {
+        "url": url,
+        "password": password,
+        "push_events": False,
+        "tag_push_events": False,
+        "issues_events": False,
+        "note_events": False,
+        "merge_requests_events": True,
+    }
+    with httpx.Client(timeout=30) as client:
+        r = client.post(
+            f"{GITEE_API}/repos/{eo}/{er}/hooks",
+            params={"access_token": access_token},
+            json=body,
+        )
+    if r.status_code not in (200, 201):
+        logger.warning("create hook failed %s/%s: %s %s", owner, repo, r.status_code, r.text[:300])
+        return None
+    try:
+        return r.json()
+    except Exception:
+        return None
+
+
+def platform_llm_key() -> tuple[str, str]:
+    """返回 (provider, api_key)。"""
+    provider = get_public_default_llm_provider()
+    if provider == "kimi":
+        key = (os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or "").strip()
+    else:
+        provider = "dashscope"
+        key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    return provider, key
+
+
+def path_with_namespace_from_payload(payload: dict[str, Any]) -> Optional[str]:
+    repo = payload.get("repository") or {}
+    p = repo.get("path_with_namespace") or repo.get("full_name")
+    if not p:
+        return None
+    s = str(p).strip()
+    return s or None
+
+
+def process_saas_merge_request_webhook(
+    payload: dict[str, Any],
+    *,
+    app_user_id: int,
+    gitee_access_token: str,
+) -> None:
+    """
+    使用用户 OAuth token 拉 PR，使用平台环境变量 LLM Key 审查，写入 pr_review_reports；
+    不向 Gitee 发帖。
+    """
+    if not wh_svc.should_handle_merge_request_webhook(payload):
+        return
+
+    pr_url = wh_svc._pr_url_from_payload(payload)
+    if not pr_url:
+        logger.error("SaaS Webhook 无法解析 PR 链接")
+        return
+
+    path_ns = path_with_namespace_from_payload(payload) or ""
+    pr = payload.get("pull_request") or {}
+    pr_number = pr.get("number")
+    try:
+        pr_number_int = int(pr_number) if pr_number is not None else 0
+    except (TypeError, ValueError):
+        pr_number_int = 0
+    pr_title = (pr.get("title") or "")[:1024] if isinstance(pr.get("title"), str) else None
+
+    provider, llm_key = platform_llm_key()
+    if not llm_key:
+        logger.error("SaaS 审查需要平台配置 DASHSCOPE_API_KEY 或 KIMI_API_KEY")
+        _save_report_failed(app_user_id, path_ns, pr_number_int, None, pr_title, "平台未配置 LLM API Key")
+        return
+
+    fetch_req = FetchPRRequest(
+        pr_url=pr_url,
+        vcs_token=gitee_access_token,
+        enrich_context=_env_bool("SAAS_WEBHOOK_ENRICH_CONTEXT", default=False),
+        use_symbol_graph=_env_bool("SAAS_WEBHOOK_USE_SYMBOL_GRAPH", default=False),
+        use_treesitter=_env_bool("SAAS_WEBHOOK_USE_TREESITTER", default=False),
+        use_pyright=_env_bool("SAAS_WEBHOOK_USE_PYRIGHT", default=False),
+    )
+    out = run_fetch_pr(fetch_req)
+    if not out.get("ok"):
+        logger.error("SaaS fetch PR 失败: %s", out.get("error"))
+        _save_report_failed(app_user_id, path_ns, pr_number_int, None, pr_title, str(out.get("error") or "fetch failed"))
+        return
+    data = out["data"]
+    head_sha = (data.get("head_sha") or "")[:80] or None
+
+    use_default = provider == "dashscope" and _env_bool("SAAS_WEBHOOK_USE_DEFAULT_REVIEW", default=True)
+    try:
+        default_passes = int(os.getenv("SAAS_WEBHOOK_DEFAULT_PASSES", "8"))
+    except ValueError:
+        default_passes = 8
+
+    review_req = ReviewRequest(
+        diff=data.get("diff") or "",
+        pr_title=data.get("title") or "",
+        pr_body=data.get("body") or "",
+        file_contexts=data.get("file_contexts") or {},
+        llm_provider=provider,
+        llm_api_key=llm_key,
+        use_mock=False,
+        use_default_review=use_default,
+        default_passes=default_passes,
+        use_semantic_context=_env_bool("SAAS_WEBHOOK_USE_SEMANTIC_CONTEXT", default=False),
+        repo_key=f'{data.get("owner")}/{data.get("repo")}' if data.get("owner") and data.get("repo") else None,
+        ref=data.get("head_sha") or None,
+    )
+    review_out = run_review_core(review_req)
+    if not review_out.get("ok"):
+        _save_report_failed(
+            app_user_id,
+            path_ns,
+            pr_number_int,
+            head_sha,
+            pr_title,
+            str(review_out.get("error") or "review failed"),
+        )
+        return
+
+    payload_json = json.dumps(review_out.get("data") or {}, ensure_ascii=False)
+    _save_report_ok(app_user_id, path_ns, pr_number_int, head_sha, pr_title, payload_json)
+    logger.info("SaaS 审查已写入报告 user=%s repo=%s pr=%s", app_user_id, path_ns, pr_number_int)
+
+
+def _save_report_ok(
+    user_id: int,
+    path_ns: str,
+    pr_number: int,
+    head_sha: Optional[str],
+    pr_title: Optional[str],
+    result_json: str,
+) -> None:
+    engine = create_db_engine()
+    if not engine:
+        return
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as session:
+        row = PrReviewReport(
+            user_id=user_id,
+            path_with_namespace=path_ns,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_title=pr_title,
+            status="completed",
+            result_json=result_json,
+            error=None,
+        )
+        session.add(row)
+        session.commit()
+
+
+def _save_report_failed(
+    user_id: int,
+    path_ns: str,
+    pr_number: int,
+    head_sha: Optional[str],
+    pr_title: Optional[str],
+    err: str,
+) -> None:
+    engine = create_db_engine()
+    if not engine:
+        return
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as session:
+        row = PrReviewReport(
+            user_id=user_id,
+            path_with_namespace=path_ns,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            pr_title=pr_title,
+            status="failed",
+            result_json=None,
+            error=err[:8000],
+        )
+        session.add(row)
+        session.commit()
+
+
+def upsert_user_from_gitee_token(
+    token_json: dict[str, Any],
+    gitee_user: dict[str, Any],
+) -> AppUser:
+    """创建或更新 Gitee 账号绑定，返回 AppUser。"""
+    engine = create_db_engine()
+    if not engine:
+        raise RuntimeError("需要配置 DATABASE_URL 才能使用 Gitee 登录与报告")
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    access = token_json.get("access_token") or ""
+    refresh = token_json.get("refresh_token")
+    expires_in = token_json.get("expires_in")
+    exp_at = None
+    if expires_in is not None:
+        try:
+            exp_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in) - 60)
+        except (TypeError, ValueError):
+            exp_at = None
+
+    gid = int(gitee_user["id"])
+    login = str(gitee_user.get("login") or "")
+
+    with Session(engine) as session:
+        stmt = select(GiteeOAuthAccount).where(GiteeOAuthAccount.gitee_user_id == gid)
+        acc = session.scalars(stmt).first()
+        if acc:
+            acc.access_token = access
+            acc.refresh_token = refresh if refresh else acc.refresh_token
+            acc.token_expires_at = exp_at
+            acc.login = login
+            user = session.get(AppUser, acc.user_id)
+            if not user:
+                raise RuntimeError("数据不一致：缺少 app_users 行")
+            session.commit()
+            session.refresh(user)
+            return user
+
+        user = AppUser()
+        session.add(user)
+        session.flush()
+        acc = GiteeOAuthAccount(
+            user_id=user.id,
+            gitee_user_id=gid,
+            login=login,
+            access_token=access,
+            refresh_token=refresh,
+            token_expires_at=exp_at,
+        )
+        session.add(acc)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def sync_hooks_for_user(user_id: int) -> dict[str, Any]:
+    """为当前用户所有有权限的仓库注册合并请求 WebHook（去重）。"""
+    engine = create_db_engine()
+    if not engine:
+        return {"ok": False, "error": "未配置 DATABASE_URL"}
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    secret = os.getenv("GITEE_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        return {"ok": False, "error": "请配置 GITEE_WEBHOOK_SECRET（与 Gitee WebHook 密码一致）"}
+
+    base = public_base_url()
+    with Session(engine) as session:
+        stmt = select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == user_id)
+        acc = session.scalars(stmt).first()
+        if not acc:
+            return {"ok": False, "error": "未绑定 Gitee 账号"}
+        user = session.get(AppUser, user_id)
+        if not user:
+            return {"ok": False, "error": "用户不存在"}
+        token = acc.access_token
+        hook_url = f"{base}/api/gitee/webhook/saas/{user.saas_webhook_token}"
+
+        added = 0
+        skipped = 0
+        failed = 0
+        page = 1
+        while page <= 20:
+            repos = list_user_repos(token, page=page, per_page=100)
+            if not repos:
+                break
+            for repo in repos:
+                pns = repo.get("path_with_namespace") or repo.get("full_name")
+                if not pns:
+                    continue
+                pns = str(pns).strip()
+                try:
+                    owner, rname = split_path_with_namespace(pns)
+                except ValueError:
+                    failed += 1
+                    continue
+                hooks = list_repo_hooks(token, owner, rname)
+                if any(h.get("url") == hook_url for h in hooks):
+                    skipped += 1
+                    wr = session.scalars(
+                        select(GiteeWatchedRepo).where(
+                            GiteeWatchedRepo.user_id == user_id,
+                            GiteeWatchedRepo.path_with_namespace == pns,
+                        )
+                    ).first()
+                    if not wr:
+                        session.add(GiteeWatchedRepo(user_id=user_id, path_with_namespace=pns, hook_id=None))
+                    continue
+                created = create_repo_hook(token, owner, rname, url=hook_url, password=secret)
+                if created:
+                    hid = created.get("id")
+                    try:
+                        hid_int = int(hid) if hid is not None else None
+                    except (TypeError, ValueError):
+                        hid_int = None
+                    wr = session.scalars(
+                        select(GiteeWatchedRepo).where(
+                            GiteeWatchedRepo.user_id == user_id,
+                            GiteeWatchedRepo.path_with_namespace == pns,
+                        )
+                    ).first()
+                    if wr:
+                        wr.hook_id = hid_int
+                    else:
+                        session.add(
+                            GiteeWatchedRepo(
+                                user_id=user_id, path_with_namespace=pns, hook_id=hid_int
+                            )
+                        )
+                    added += 1
+                else:
+                    failed += 1
+            if len(repos) < 100:
+                break
+            page += 1
+        session.commit()
+        return {"ok": True, "data": {"added": added, "skipped": skipped, "failed": failed, "hook_url": hook_url}}

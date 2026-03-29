@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审查报告 · AI PR Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
+    .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    a { color: #134e4a; font-weight: 600; }
+    a.login-link {
+      display: inline-block; padding: 0.5rem 1rem; background: #134e4a; color: #fff !important;
+      text-decoration: none; border-radius: 8px;
+    }
+    .card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; background: #fff; }
+    button {
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+      background: #134e4a; color: #fff; margin-right: 0.5rem; margin-top: 0.25rem;
+    }
+    button.secondary { background: #e7e5e4; color: #1c1917; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    ul.reports { list-style: none; padding: 0; margin: 0; }
+    ul.reports li {
+      border-bottom: 1px solid #f5f5f4; padding: 0.65rem 0; cursor: pointer;
+    }
+    ul.reports li:hover { background: #fafaf9; margin: 0 -0.5rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    .meta { font-size: 0.8rem; color: #78716c; }
+    .err { color: #b91c1c; font-size: 0.9rem; }
+    pre.detail { white-space: pre-wrap; font-size: 0.8rem; background: #f5f5f4; padding: 0.75rem; border-radius: 8px; max-height: 50vh; overflow: auto; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    .badge-fail { background: #fee2e2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <h1>审查控制台</h1>
+  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；报告仅保存在此处，<strong>不会</strong>自动发到 PR 评论。LLM 使用服务端配置的 Key。</p>
+  <p class="sub"><a href="/">返回首页</a> · <a href="/manual">手动审查</a></p>
+
+  <div id="auth" class="card"></div>
+  <div id="reports" class="card" style="display:none;">
+    <h2 style="margin:0 0 0.75rem;font-size:1rem;">报告列表</h2>
+    <ul class="reports" id="reportList"></ul>
+    <div id="detail" style="margin-top:1rem;display:none;"></div>
+  </div>
+
+  <script>
+    const API = "";
+
+    async function j(url, opt) {
+      const r = await fetch(API + url, { credentials: "include", ...opt });
+      return r.json();
+    }
+
+    async function refresh() {
+      const authEl = document.getElementById("auth");
+      const me = await j("/api/saas/me");
+      if (!me.authenticated) {
+        authEl.innerHTML = `
+          <p>尚未登录。</p>
+          <p><a class="login-link" href="/auth/gitee/login">使用 Gitee 登录</a></p>
+        `;
+        document.getElementById("reports").style.display = "none";
+        return;
+      }
+      const u = me.user;
+      authEl.innerHTML = `
+        <p><strong>@${u.gitee_login}</strong>（用户 id: ${u.id}）</p>
+        <p class="meta">已为 ${u.watched_repos} 个仓库登记同步记录；点下方按钮会为<strong>你有权限的仓库</strong>注册合并请求 WebHook（已存在则跳过）。</p>
+        <button type="button" id="btnSync">同步 WebHook 到仓库</button>
+        <button type="button" class="secondary" id="btnOut">退出登录</button>
+        <p id="syncMsg" class="meta" style="margin-top:0.75rem;"></p>
+      `;
+      document.getElementById("btnSync").onclick = async () => {
+        const btn = document.getElementById("btnSync");
+        const msg = document.getElementById("syncMsg");
+        btn.disabled = true;
+        msg.textContent = "同步中…";
+        const res = await j("/api/saas/gitee/sync-hooks", { method: "POST" });
+        btn.disabled = false;
+        if (!res.ok) {
+          msg.textContent = "失败: " + (res.error || "未知错误");
+          msg.className = "err";
+          return;
+        }
+        msg.className = "meta";
+        const d = res.data || {};
+        msg.textContent = "新增 " + (d.added || 0) + "，跳过 " + (d.skipped || 0) + "，失败 " + (d.failed || 0) + "。Hook URL: " + (d.hook_url || "");
+        refresh();
+      };
+      document.getElementById("btnOut").onclick = async () => {
+        await j("/auth/logout", { method: "POST" });
+        refresh();
+      };
+
+      document.getElementById("reports").style.display = "block";
+      const list = await j("/api/saas/reports?limit=50");
+      const ul = document.getElementById("reportList");
+      ul.innerHTML = "";
+      const items = (list.data && list.data.items) || [];
+      if (!items.length) {
+        ul.innerHTML = "<li class='meta'>暂无报告；在 Gitee 打开新的合并请求后会自动生成。</li>";
+      } else {
+        items.forEach((it) => {
+          const li = document.createElement("li");
+          const b = it.status === "completed"
+            ? "<span class='badge badge-ok'>完成</span>"
+            : "<span class='badge badge-fail'>失败</span>";
+          li.innerHTML = b + "<strong>" + it.path_with_namespace + "</strong> PR #" + it.pr_number +
+            "<div class='meta'>" + (it.created_at || "") + " · " + (it.pr_title || "") + "</div>";
+          li.onclick = () => loadDetail(it.id);
+          ul.appendChild(li);
+        });
+      }
+      document.getElementById("detail").style.display = "none";
+    }
+
+    async function loadDetail(id) {
+      const dEl = document.getElementById("detail");
+      dEl.style.display = "block";
+      dEl.innerHTML = "加载中…";
+      const r = await j("/api/saas/reports/" + id);
+      if (!r.ok || !r.data) {
+        dEl.innerHTML = "<p class='err'>加载失败</p>";
+        return;
+      }
+      const d = r.data;
+      let body = "<p><strong>" + d.path_with_namespace + "</strong> PR #" + d.pr_number + "</p>";
+      if (d.error) body += "<p class='err'>" + d.error + "</p>";
+      if (d.result && d.result.comments) {
+        body += "<p>共 " + d.result.comments.length + " 条意见</p><pre class='detail'>" +
+          JSON.stringify(d.result.comments, null, 2) + "</pre>";
+      } else if (d.result) {
+        body += "<pre class='detail'>" + JSON.stringify(d.result, null, 2) + "</pre>";
+      }
+      dEl.innerHTML = body;
+    }
+
+    refresh();
+  </script>
+</body>
+</html>

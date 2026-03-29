@@ -105,7 +105,7 @@ def process_merge_request_webhook(payload: dict[str, Any]) -> None:
         return
 
     from app.routers.gitee import FetchPRRequest, run_fetch_pr
-    from app.routers.review import ReviewRequest, review as run_review
+    from app.routers.review import ReviewRequest, run_review_core
 
     pr_url = _pr_url_from_payload(payload)
     if not pr_url:
@@ -159,7 +159,7 @@ def process_merge_request_webhook(payload: dict[str, Any]) -> None:
         repo_key=f'{data.get("owner")}/{data.get("repo")}' if data.get("owner") and data.get("repo") else None,
         ref=data.get("head_sha") or None,
     )
-    review_out = run_review(review_req)
+    review_out = run_review_core(review_req)
     if not review_out.get("ok"):
         logger.error("Webhook 审查失败: %s", review_out.get("error"))
         return
