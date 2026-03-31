@@ -7,8 +7,11 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 
-    _ROOT = Path(__file__).resolve().parent.parent
-    load_dotenv(_ROOT / ".env")
+    # 包目录（ai-check-platform/）；多数人在仓库根 prreview/ 放 .env，也需能读到
+    _PKG_ROOT = Path(__file__).resolve().parent.parent
+    _REPO_ROOT = _PKG_ROOT.parent
+    load_dotenv(_REPO_ROOT / ".env")
+    load_dotenv(_PKG_ROOT / ".env")
 except ImportError:
     pass
 

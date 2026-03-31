@@ -397,9 +397,22 @@ def sync_hooks_for_user(user_id: int) -> dict[str, Any]:
 
     secret = os.getenv("GITEE_WEBHOOK_SECRET", "").strip()
     if not secret:
+        # Debug hint for env wiring issues (Railway often mis-scoped vars / no restart).
+        present = {k: bool(os.getenv(k, "").strip()) for k in ("GITEE_WEBHOOK_SECRET", "PUBLIC_BASE_URL", "DATABASE_URL")}
+        logger.warning(
+            "sync_hooks_for_user: missing GITEE_WEBHOOK_SECRET user_id=%s env_present=%s",
+            user_id,
+            present,
+        )
         return {"ok": False, "error": "请配置 GITEE_WEBHOOK_SECRET（与 Gitee WebHook 密码一致）"}
 
     base = public_base_url()
+    logger.info(
+        "sync_hooks_for_user: begin user_id=%s base=%s secret_len=%s",
+        user_id,
+        base,
+        len(secret),
+    )
     with Session(engine) as session:
         stmt = select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == user_id)
         acc = session.scalars(stmt).first()

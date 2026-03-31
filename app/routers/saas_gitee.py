@@ -44,7 +44,7 @@ a{color:#134e4a;font-weight:600}
 <li><code>GITEE_OAUTH_REDIRECT_URI</code>（须与 Gitee 第三方应用里的「回调地址」完全一致，例如 <code>http://127.0.0.1:8000/auth/gitee/callback</code>）</li>
 </ul>
 <p>同时需要 <code>DATABASE_URL</code>、<code>SESSION_SECRET</code>。修改后请<strong>重启</strong> <code>uvicorn</code>。</p>
-<p>应用会在启动时自动加载项目根目录的 <code>.env</code>。</p>
+<p>应用启动时会加载 <strong>仓库根目录</strong>的 <code>.env</code>，以及 <code>ai-check-platform/.env</code>（后者可覆盖前者）。请确认变量名无拼写错误、值不为空，修改后<strong>重启</strong> <code>uvicorn</code>。</p>
 <p><a href="/">返回首页</a> · <a href="/manual">手动审查（无需 OAuth）</a></p>
 </body></html>"""
 
