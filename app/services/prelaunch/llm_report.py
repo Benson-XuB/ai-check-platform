@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from app.services.llm_defaults import get_public_default_llm_provider
-from app.services.prelaunch.agents_gonogo import GonogoStages, run_three_agent_pipeline
+from app.services.prelaunch.agents_gonogo import GonogoStages, run_multi_agent_pipeline
 from app.services.prelaunch.detect import ProjectProfile
 from app.services.prelaunch.schemas import LlmReport, NormalizedFinding
 from app.services.review import _call_dashscope
@@ -51,7 +51,20 @@ def _build_legacy_prompt(
         "package_managers": profile.package_managers,
         "lockfiles": profile.lockfiles,
     }
-    return f"""你是应用安全与架构顾问，面向小团队上线前自查（非正式渗透/合规结论）。
+    return f"""你是应用安全与架构顾问，专门审查“AI 生成代码常见坑”的上线前自查（非正式渗透/合规结论）。
+
+重点检查（请显式覆盖你看到的高风险点）：
+1. 鉴权/越权/ownership：是否按 user_id/path 参数直接查库返回；是否缺少“资源归属校验”
+2. Response 敏感字段泄露：password/hash/token/secret/key/internal id、权限字段
+3. 输入校验不足：SQL/NoSQL 注入、命令执行、SSRF、路径穿越、模板注入
+4. 错误处理泄露：stack trace/SQL/路径/配置回显；debug 模式、过宽 CORS
+5. 密钥与加密：硬编码密钥、弱随机数/弱加密
+6. 依赖与供应链：高危依赖洞的修复优先级（结合 pip-audit/npm/trivy findings）
+7. 不安全文件操作：上传/解压/临时目录/权限（zip slip 等）
+8. 并发/状态：幂等缺失、竞态、重复扣费/重复写入
+9. 可用性与运维：超时/重试/限流、日志脱敏、备份、健康检查
+
+要求：除非有明确证据锚点（文件/行号/片段），不要把推断写成已确认；没有锚点请标“疑似/需人工确认”。
 
 【仓库探测】
 {json.dumps(prof, ensure_ascii=False, indent=2)}
@@ -157,7 +170,7 @@ def generate_llm_report_with_stages(
     if legacy:
         return _generate_llm_report_legacy(findings, profile, repo_root, llm_provider, api_key), None
     try:
-        llm, stages = run_three_agent_pipeline(findings, profile, repo_root, llm_provider, api_key)
+        llm, stages = run_multi_agent_pipeline(findings, profile, repo_root, llm_provider, api_key)
         return llm, _gonogo_stages_blob(stages)
     except Exception as e:
         llm_fb = _generate_llm_report_legacy(findings, profile, repo_root, llm_provider, api_key)

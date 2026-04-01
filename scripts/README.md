@@ -13,6 +13,35 @@ python scripts/test_review_local.py
 
 ---
 
+## prelaunch_batch_submit.py
+
+批量提交多个仓库做 Prelaunch 扫描（不依赖前端页面）。
+
+### 1. 启动服务
+
+```bash
+uvicorn app.main:app --port 8000
+```
+
+### 2. 运行
+
+```bash
+export DASHSCOPE_API_KEY="你的通义千问 Key"
+
+# 直接传多个 repo url
+python scripts/prelaunch_batch_submit.py --llm-api-key "$DASHSCOPE_API_KEY" \
+  https://github.com/org/repo1 \
+  https://github.com/org/repo2
+
+# 从文件读取（每行一个 repo url，可用 # 注释）
+python scripts/prelaunch_batch_submit.py --llm-api-key "$DASHSCOPE_API_KEY" --file repos.txt
+
+# 可选：轮询查看状态
+python scripts/prelaunch_batch_submit.py --llm-api-key "$DASHSCOPE_API_KEY" --watch --file repos.txt
+```
+
+---
+
 ## run_review_and_report.py
 
 运行 PR 审查并生成报告 + Catch 比率标注模板。
