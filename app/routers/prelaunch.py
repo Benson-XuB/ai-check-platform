@@ -26,6 +26,14 @@ class CreatePrelaunchJobBody(BaseModel):
     llm_api_key: str = Field(..., min_length=1, description="对应默认厂商的 API Key（用户自备）")
 
 
+class CreatePrelaunchBatchJobsBody(BaseModel):
+    repo_urls: list[str] = Field(..., min_length=1, description="HTTPS Git 地址列表")
+    git_token: Optional[str] = None
+    ref: Optional[str] = Field(None, description="分支或 tag，默认仓库默认分支")
+    llm_provider: str = Field(default_factory=get_public_default_llm_provider)
+    llm_api_key: str = Field(..., min_length=1, description="对应默认厂商的 API Key（用户自备）")
+
+
 @router.get("/health")
 def prelaunch_health():
     return scanner_status()
@@ -42,6 +50,28 @@ def create_prelaunch_job(request: Request, body: CreatePrelaunchJobBody):
         body.llm_api_key,
     )
     return {"ok": True, "job_id": job_id}
+
+
+@router.post("/jobs/batch")
+def create_prelaunch_jobs_batch(request: Request, body: CreatePrelaunchBatchJobsBody):
+    enforce_prelaunch_job_rate_limit(request)
+    job_ids: list[str] = []
+    for raw in body.repo_urls:
+        repo_url = (raw or "").strip()
+        if not repo_url:
+            continue
+        job_ids.append(
+            start_job(
+                repo_url,
+                body.git_token,
+                body.ref,
+                body.llm_provider,
+                body.llm_api_key,
+            )
+        )
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="请至少提供一个有效的 repo_url")
+    return {"ok": True, "job_ids": job_ids}
 
 
 @router.post("/jobs/zip")

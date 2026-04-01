@@ -127,14 +127,14 @@ def start_job_from_zip(
     job_id = uuid.uuid4().hex[:16]
     store.create_job_record(job_id, "本地上传 ZIP", None)
     jdir = store.job_dir(job_id)
-    jdir.mkdir(parents=True)
+    jdir.mkdir(parents=True, exist_ok=True)
     (jdir / "upload.zip").write_bytes(zip_bytes)
     import threading
 
     zp = str((jdir / "upload.zip").resolve())
     t = threading.Thread(
         target=run_prelaunch_pipeline,
-        args=("", None, None, llm_provider, llm_api_key),
+        args=(job_id, "", None, None, llm_provider, llm_api_key),
         kwargs={"zip_path": zp},
         daemon=True,
     )
