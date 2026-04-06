@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
@@ -23,6 +24,41 @@ logger = logging.getLogger(__name__)
 GITEE_OAUTH_AUTHORIZE = "https://gitee.com/oauth/authorize"
 GITEE_OAUTH_TOKEN = "https://gitee.com/oauth/token"
 GITEE_API = "https://gitee.com/api/v5"
+
+_DEFAULT_HTTP_TIMEOUT_SEC = 30
+_DEFAULT_HTTP_RETRIES = 1  # total attempts = 1 + retries
+
+
+def _http_timeout() -> httpx.Timeout:
+    try:
+        total = float(os.getenv("GITEE_HTTP_TIMEOUT_SEC", str(_DEFAULT_HTTP_TIMEOUT_SEC)))
+    except ValueError:
+        total = float(_DEFAULT_HTTP_TIMEOUT_SEC)
+    # Split timeouts so handshake/connect doesn't consume whole budget.
+    return httpx.Timeout(timeout=total, connect=min(10.0, total), read=total, write=total, pool=total)
+
+
+def _http_retries() -> int:
+    try:
+        return max(0, min(3, int(os.getenv("GITEE_HTTP_RETRIES", str(_DEFAULT_HTTP_RETRIES)))))
+    except ValueError:
+        return _DEFAULT_HTTP_RETRIES
+
+
+def _request_with_retry(fn, *, op: str) -> Any:
+    retries = _http_retries()
+    last_err: Optional[Exception] = None
+    for attempt in range(1, retries + 2):
+        try:
+            return fn()
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RequestError) as e:
+            last_err = e
+            # small backoff
+            if attempt < retries + 2:
+                time.sleep(0.3 * attempt)
+                continue
+            break
+    raise RuntimeError(f"{op} 网络超时/握手失败（请检查出站网络/DNS/IPv6/代理）：{last_err}") from last_err
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -67,17 +103,20 @@ def exchange_code_for_token(code: str) -> dict[str, Any]:
     cid = os.getenv("GITEE_OAUTH_CLIENT_ID", "").strip()
     sec = os.getenv("GITEE_OAUTH_CLIENT_SECRET", "").strip()
     redir = os.getenv("GITEE_OAUTH_REDIRECT_URI", "").strip()
-    with httpx.Client(timeout=30) as client:
-        r = client.post(
-            GITEE_OAUTH_TOKEN,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": cid,
-                "client_secret": sec,
-                "redirect_uri": redir,
-            },
-            headers={"Accept": "application/json"},
+    with httpx.Client(timeout=_http_timeout()) as client:
+        r = _request_with_retry(
+            lambda: client.post(
+                GITEE_OAUTH_TOKEN,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": cid,
+                    "client_secret": sec,
+                    "redirect_uri": redir,
+                },
+                headers={"Accept": "application/json"},
+            ),
+            op="Gitee OAuth 换 token",
         )
     if r.status_code != 200:
         logger.warning("Gitee token exchange failed: %s %s", r.status_code, r.text[:300])
@@ -86,10 +125,10 @@ def exchange_code_for_token(code: str) -> dict[str, Any]:
 
 
 def fetch_gitee_user(access_token: str) -> dict[str, Any]:
-    with httpx.Client(timeout=30) as client:
-        r = client.get(
-            f"{GITEE_API}/user",
-            params={"access_token": access_token},
+    with httpx.Client(timeout=_http_timeout()) as client:
+        r = _request_with_retry(
+            lambda: client.get(f"{GITEE_API}/user", params={"access_token": access_token}),
+            op="读取 Gitee 用户",
         )
     if r.status_code != 200:
         raise RuntimeError(f"读取 Gitee 用户失败: HTTP {r.status_code}")
@@ -106,15 +145,18 @@ def split_path_with_namespace(path_with_namespace: str) -> tuple[str, str]:
 
 
 def list_user_repos(access_token: str, *, page: int = 1, per_page: int = 100) -> list[dict[str, Any]]:
-    with httpx.Client(timeout=60) as client:
-        r = client.get(
-            f"{GITEE_API}/user/repos",
-            params={
-                "access_token": access_token,
-                "page": page,
-                "per_page": per_page,
-                "sort": "updated",
-            },
+    with httpx.Client(timeout=_http_timeout()) as client:
+        r = _request_with_retry(
+            lambda: client.get(
+                f"{GITEE_API}/user/repos",
+                params={
+                    "access_token": access_token,
+                    "page": page,
+                    "per_page": per_page,
+                    "sort": "updated",
+                },
+            ),
+            op="读取 Gitee 仓库列表",
         )
     if r.status_code != 200:
         logger.warning("list repos failed: %s %s", r.status_code, r.text[:200])
@@ -125,10 +167,13 @@ def list_user_repos(access_token: str, *, page: int = 1, per_page: int = 100) ->
 
 def list_repo_hooks(access_token: str, owner: str, repo: str) -> list[dict[str, Any]]:
     eo, er = quote(owner, safe=""), quote(repo, safe="")
-    with httpx.Client(timeout=30) as client:
-        r = client.get(
-            f"{GITEE_API}/repos/{eo}/{er}/hooks",
-            params={"access_token": access_token, "page": 1, "per_page": 50},
+    with httpx.Client(timeout=_http_timeout()) as client:
+        r = _request_with_retry(
+            lambda: client.get(
+                f"{GITEE_API}/repos/{eo}/{er}/hooks",
+                params={"access_token": access_token, "page": 1, "per_page": 50},
+            ),
+            op="读取 Gitee WebHook 列表",
         )
     if r.status_code != 200:
         return []
@@ -154,11 +199,14 @@ def create_repo_hook(
         "note_events": False,
         "merge_requests_events": True,
     }
-    with httpx.Client(timeout=30) as client:
-        r = client.post(
-            f"{GITEE_API}/repos/{eo}/{er}/hooks",
-            params={"access_token": access_token},
-            json=body,
+    with httpx.Client(timeout=_http_timeout()) as client:
+        r = _request_with_retry(
+            lambda: client.post(
+                f"{GITEE_API}/repos/{eo}/{er}/hooks",
+                params={"access_token": access_token},
+                json=body,
+            ),
+            op="创建 Gitee WebHook",
         )
     if r.status_code not in (200, 201):
         logger.warning("create hook failed %s/%s: %s %s", owner, repo, r.status_code, r.text[:300])
