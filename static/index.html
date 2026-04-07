@@ -69,11 +69,8 @@
     }
     .oauth-btn.gitee { background: var(--gitee); }
     .oauth-btn.gitee:hover { filter: brightness(1.05); }
-    .oauth-btn.github {
-      background: var(--github);
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
+    .oauth-btn.github { background: var(--github); }
+    .oauth-btn.github:hover { filter: brightness(1.05); }
     .hint {
       font-size: 0.8125rem;
       color: var(--faint);
@@ -101,11 +98,11 @@
     <div class="card">
       <h2>登录</h2>
       <a class="oauth-btn gitee" href="/auth/gitee/login">使用 Gitee 登录</a>
-      <button type="button" class="oauth-btn github" disabled title="开发中">使用 GitHub 登录（即将支持）</button>
-      <p class="hint">Gitee：登录后在控制台点击「同步 WebHook」即可关联有权限的仓库。若打开登录页提示未配置，请在项目根目录复制 <code>.env.example</code> 为 <code>.env</code> 并填写 OAuth 与 <code>DATABASE_URL</code> 后重启服务。GitHub 自动关联开发中，可先使用<a href="/manual">手动审查</a>。</p>
+      <a class="oauth-btn github" href="/auth/github/install">安装/连接 GitHub App</a>
+      <p class="hint">GitHub：点击上方按钮安装 App 到你的组织/仓库，之后 PR 打开/更新会自动生成报告并在 PR 上显示 Check；在控制台点 <strong>Agree</strong> 才会回写评论到 PR。Gitee 仍可用（SaaS 默认关闭需手动开启）。</p>
     </div>
 
-    <p class="hint" style="margin:0;">已登录？打开 <a href="/app">审查控制台</a> 查看报告或同步 WebHook。</p>
+    <p class="hint" style="margin:0;">已登录？打开 <a href="/app">审查控制台</a> 查看报告。</p>
 
     <div class="links">
       <a href="/manual">手动审查（高级）</a>
