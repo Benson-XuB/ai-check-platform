@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import secrets
@@ -25,6 +26,10 @@ from app.storage.models import AppUser, GiteeOAuthAccount, GiteeWatchedRepo, PrR
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["saas-gitee"])
+
+def _saas_enable_gitee() -> bool:
+    # Default disabled in production; opt-in by env.
+    return (os.getenv("SAAS_ENABLE_GITEE") or "").strip().lower() in ("1", "true", "yes", "on")
 
 _GITEE_OAUTH_SETUP_HTML = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
@@ -83,6 +88,8 @@ def _session_user_id(request: Request) -> Optional[int]:
 
 @router.get("/auth/gitee/login")
 def gitee_oauth_login(request: Request):
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     if not oauth_config_ok():
         return HTMLResponse(content=_GITEE_OAUTH_SETUP_HTML, status_code=503)
     if not create_db_engine():
@@ -96,6 +103,8 @@ def gitee_oauth_login(request: Request):
 
 @router.get("/auth/gitee/callback")
 def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     if not code:
         raise HTTPException(400, "缺少 code")
     expected = request.session.get("oauth_state")
@@ -117,12 +126,17 @@ def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Op
 
 @router.post("/auth/logout")
 def logout(request: Request):
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     request.session.clear()
     return {"ok": True}
 
 
-@router.get("/api/saas/me")
+@router.get("/api/saas/gitee/me")
 def saas_me(request: Request):
+    if not _saas_enable_gitee():
+        # keep consistent with unauthenticated shape so UI doesn't explode
+        return {"ok": True, "authenticated": False, "disabled": True, "provider": "gitee"}
     uid = _session_user_id(request)
     if not uid:
         return {"ok": True, "authenticated": False}
@@ -152,14 +166,18 @@ def saas_me(request: Request):
 
 @router.post("/api/saas/gitee/sync-hooks")
 def saas_sync_hooks(request: Request) -> dict[str, Any]:
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
     return sync_hooks_for_user(uid)
 
 
-@router.get("/api/saas/reports")
+@router.get("/api/saas/gitee/reports")
 def saas_reports(request: Request, limit: int = 50, offset: int = 0):
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
@@ -196,8 +214,10 @@ def saas_reports(request: Request, limit: int = 50, offset: int = 0):
         }
 
 
-@router.get("/api/saas/reports/{report_id}")
+@router.get("/api/saas/gitee/reports/{report_id}")
 def saas_report_detail(request: Request, report_id: int):
+    if not _saas_enable_gitee():
+        raise HTTPException(404, "not found")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
