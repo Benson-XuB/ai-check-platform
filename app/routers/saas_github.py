@@ -113,6 +113,13 @@ def github_install_callback(
     return RedirectResponse(url="/app", status_code=302)
 
 
+@router.post("/auth/logout")
+def logout(request: Request):
+    """通用退出登录（清空 session）。"""
+    request.session.clear()
+    return {"ok": True}
+
+
 @router.get("/api/saas/me")
 def saas_me_github(request: Request):
     """SaaS 账号状态（GitHub App 模式）。"""
