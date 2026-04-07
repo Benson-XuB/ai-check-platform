@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.middleware.max_body import MaxRequestBodySizeMiddleware
-from app.routers import diag, gitee, gitee_webhook, prelaunch, rag, review, saas_gitee, vcs
+from app.routers import diag, gitee, gitee_webhook, github_webhook, prelaunch, rag, review, saas_gitee, saas_github, vcs
 from app.storage.init_db import init_db
 
 
@@ -62,10 +62,12 @@ app.add_middleware(
 app.include_router(gitee.router)
 app.include_router(vcs.router)
 app.include_router(gitee_webhook.router)
+app.include_router(github_webhook.router)
 app.include_router(rag.router)
 app.include_router(review.router)
 app.include_router(prelaunch.router)
 app.include_router(saas_gitee.router)
+app.include_router(saas_github.router)
 app.include_router(diag.router)
 
 STATIC_DIR = Path(__file__).parent.parent / "static"

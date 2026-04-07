@@ -131,3 +131,47 @@ class PrReviewReport(Base):
     __table_args__ = (Index("idx_pr_reports_user_created", "user_id", "created_at"),)
 
 
+class GitHubAppInstallation(Base):
+    """GitHub App 安装与用户绑定（installation_id -> AppUser）。"""
+
+    __tablename__ = "github_app_installations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("app_users.id"), nullable=False, index=True)
+    installation_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    account_login: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    account_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # User | Organization
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class GitHubPrBinding(Base):
+    """将一次报告与 GitHub PR/Check Run 绑定（用于 Agree 后回写）。"""
+
+    __tablename__ = "github_pr_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(Integer, ForeignKey("pr_review_reports.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("app_users.id"), nullable=False, index=True)
+    installation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    owner: Mapped[str] = mapped_column(String(256), nullable=False)
+    repo: Mapped[str] = mapped_column(String(256), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    check_run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+Index("idx_github_binding_pr", GitHubPrBinding.owner, GitHubPrBinding.repo, GitHubPrBinding.pr_number)
+Index("idx_github_binding_report", GitHubPrBinding.report_id)
+
+
