@@ -219,7 +219,7 @@ def saas_report_detail_github(request: Request, report_id: int):
 
 
 @router.post("/api/saas/github/reports/{report_id}/agree")
-def github_agree_postback(request: Request, report_id: int):
+def github_agree_postback(request: Request, report_id: int, idx: Optional[int] = None):
     """
     User clicks Agree in SaaS UI:
     - verify session user owns report
@@ -240,9 +240,32 @@ def github_agree_postback(request: Request, report_id: int):
         if not r or r.user_id != uid:
             raise HTTPException(404, "报告不存在")
         b = session.scalars(select(GitHubPrBinding).where(GitHubPrBinding.report_id == r.id)).first()
-        if not b or b.user_id != uid:
+        if not b:
+            # self-heal: try to reconstruct binding for new report if missing
+            inst = session.scalars(select(GitHubAppInstallation).where(GitHubAppInstallation.user_id == uid)).first()
+            if not inst:
+                raise HTTPException(404, "GitHub 绑定不存在")
+            pns = (r.path_with_namespace or "").strip()
+            if "/" not in pns:
+                raise HTTPException(404, "GitHub 绑定不存在")
+            owner, repo = pns.split("/", 1)
+            b = GitHubPrBinding(
+                report_id=r.id,
+                user_id=uid,
+                installation_id=int(inst.installation_id),
+                owner=owner,
+                repo=repo,
+                pr_number=int(r.pr_number),
+                head_sha=r.head_sha,
+                check_run_id=None,
+                posted_at=None,
+            )
+            session.add(b)
+            session.commit()
+            session.refresh(b)
+        if b.user_id != uid:
             raise HTTPException(404, "GitHub 绑定不存在")
-        out = post_report_comments_to_github(session, report=r, binding=b)
+        out = post_report_comments_to_github(session, report=r, binding=b, only_idx=idx)
         if not out.get("ok"):
             raise HTTPException(502, str(out.get("error") or "postback failed"))
         return {"ok": True, "data": out}

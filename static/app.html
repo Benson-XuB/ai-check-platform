@@ -132,7 +132,7 @@
       const comments = (d.result && d.result.comments) ? d.result.comments : [];
       const count = Array.isArray(comments) ? comments.length : 0;
       body += "<div class='detail-top'><div class='meta'>共 <strong>" + count + "</strong> 条意见</div>" +
-        "<div><button type='button' id='btnAgree'>Agree 并回写到 GitHub PR</button></div></div>";
+        "<div><button type='button' id='btnAgree'>提交全部到 GitHub PR</button></div></div>";
       if (Array.isArray(comments) && comments.length) {
         body += "<div class='findings'>" + comments.map((c, idx) => renderFinding(c, idx)).join("") + "</div>";
       } else if (d.result) {
@@ -182,6 +182,20 @@
           el.textContent = isHidden ? "收起" : "展开";
         };
       });
+
+      document.querySelectorAll("[data-post-one]").forEach((el) => {
+        el.onclick = async () => {
+          const idx = el.getAttribute("data-post-one");
+          el.disabled = true;
+          const res = await j("/api/saas/github/reports/" + id + "/agree?idx=" + encodeURIComponent(idx), { method: "POST" });
+          el.disabled = false;
+          if (!res.ok) {
+            alert("提交失败: " + (res.detail || res.error || "未知错误"));
+            return;
+          }
+          alert("已提交这一条到 GitHub PR");
+        };
+      });
     }
 
     function escapeHtml(s) {
@@ -220,6 +234,7 @@
               ${cat ? `<span class="finding-cat">${escapeHtml(cat)}</span>` : ``}
             </div>
             <div class="finding-actions">
+              <button type="button" class="btn-small" data-post-one="${idx}">提交这一条</button>
               <button type="button" class="btn-small secondary" data-copy="${escapeHtml(loc)}">复制</button>
               ${showToggle ? `<button type="button" class="btn-small" data-toggle="${bodyId}">展开</button>` : ``}
             </div>

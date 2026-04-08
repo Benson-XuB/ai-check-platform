@@ -175,3 +175,21 @@ Index("idx_github_binding_pr", GitHubPrBinding.owner, GitHubPrBinding.repo, GitH
 Index("idx_github_binding_report", GitHubPrBinding.report_id)
 
 
+class GitHubPostedComment(Base):
+    """每条已回写的 comment 去重（支持单条提交、防重复）。"""
+
+    __tablename__ = "github_posted_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    binding_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_pr_bindings.id"), nullable=False, index=True)
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (UniqueConstraint("binding_id", "item_key", name="uq_github_posted_binding_item"),)
+
+
+Index("idx_github_posted_binding", GitHubPostedComment.binding_id)
+
+
