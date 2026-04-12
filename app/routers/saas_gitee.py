@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import json
 import logging
-import secrets
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -20,6 +19,7 @@ from app.services.gitee_saas import (
     sync_hooks_for_user,
     upsert_user_from_gitee_token,
 )
+from app.services.oauth_state import make_signed_oauth_state, verify_signed_oauth_state
 from app.storage.db import create_db_engine
 from app.storage.models import AppUser, GiteeOAuthAccount, GiteeWatchedRepo, PrReviewReport
 
@@ -123,8 +123,7 @@ def gitee_oauth_login(request: Request):
         return HTMLResponse(content=_GITEE_OAUTH_SETUP_HTML, status_code=503)
     if not create_db_engine():
         return HTMLResponse(content=_DATABASE_SETUP_HTML, status_code=503)
-    state = secrets.token_urlsafe(32)
-    request.session["oauth_state"] = state
+    state = make_signed_oauth_state()
     from app.services.gitee_saas import gitee_oauth_authorize_url
 
     return RedirectResponse(url=gitee_oauth_authorize_url(state), status_code=302)
@@ -136,10 +135,12 @@ def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Op
         return HTMLResponse(content=_GITEE_SAAS_DISABLED_HTML, status_code=403)
     if not code:
         raise HTTPException(400, "缺少 code")
-    expected = request.session.get("oauth_state")
-    if not state or state != expected:
-        raise HTTPException(400, "OAuth state 无效")
-    request.session.pop("oauth_state", None)
+    if not verify_signed_oauth_state(state):
+        raise HTTPException(
+            400,
+            "OAuth state 无效（请从本站「使用 Gitee 登录」重新发起；勿复制回调链接；"
+            "并保证 Gitee 回调地址与访问站点同为 www 或同为非 www）",
+        )
     _require_db()
     try:
         token_json = exchange_code_for_token(code)

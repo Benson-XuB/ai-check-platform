@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 from typing import Optional
 
 import json
@@ -15,6 +14,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.services.oauth_state import make_signed_oauth_state, verify_signed_oauth_state
 from app.storage.db import create_db_engine
 from app.storage.models import AppUser, GitHubAppInstallation, GitHubPrBinding, PrReviewReport
 
@@ -65,8 +65,7 @@ def github_install(request: Request):
     After installation, GitHub redirects to /auth/github/callback with installation_id + setup_action.
     """
     _require_db()
-    state = secrets.token_urlsafe(32)
-    request.session["gh_install_state"] = state
+    state = make_signed_oauth_state()
     return RedirectResponse(url=_github_app_install_url(state), status_code=302)
 
 
@@ -78,10 +77,8 @@ def github_install_callback(
     state: Optional[str] = None,
 ):
     _require_db()
-    expected = request.session.get("gh_install_state")
-    if not state or state != expected:
+    if not verify_signed_oauth_state(state):
         raise HTTPException(400, "GitHub install state 无效")
-    request.session.pop("gh_install_state", None)
 
     if installation_id is None:
         raise HTTPException(400, "缺少 installation_id")
