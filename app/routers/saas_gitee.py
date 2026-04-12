@@ -28,8 +28,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["saas-gitee"])
 
 def _saas_enable_gitee() -> bool:
-    # Default disabled in production; opt-in by env.
-    return (os.getenv("SAAS_ENABLE_GITEE") or "").strip().lower() in ("1", "true", "yes", "on")
+    """
+    Gitee SaaS routes are enabled by default.
+
+    Turn off explicitly (e.g. GitHub-only deploy or bad egress to gitee.com):
+    - SAAS_DISABLE_GITEE=1|true|yes|on
+    - SAAS_ENABLE_GITEE=0|false|no|off
+
+    If both are set, SAAS_DISABLE_GITEE wins.
+    """
+    if (os.getenv("SAAS_DISABLE_GITEE") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return False
+    raw = (os.getenv("SAAS_ENABLE_GITEE") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+_GITEE_SAAS_DISABLED_HTML = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gitee SaaS 已关闭</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1c1917}
+code{background:#f5f5f4;padding:0.1em 0.35em;border-radius:4px;font-size:0.9em}
+a{color:#134e4a;font-weight:600}
+</style></head><body>
+<h1>此服务上 Gitee 登录未开启</h1>
+<p>当前进程判定 Gitee SaaS 为<strong>关闭</strong>。若你已在平台里设置了 <code>SAAS_ENABLE_GITEE=1</code> 仍看到本页，多半是<strong>环境变量加在了别的服务上</strong>，或 Compose/镜像里写死了 <code>SAAS_ENABLE_GITEE=0</code>。</p>
+<p>关闭方式（任选其一）：<code>SAAS_DISABLE_GITEE=1</code>，或 <code>SAAS_ENABLE_GITEE=0</code>。默认<strong>不配置则为开启</strong>。</p>
+<p><a href="/">返回首页</a> · <a href="/manual">手动审查</a> · <a href="/auth/github/install">GitHub App</a></p>
+</body></html>"""
 
 _GITEE_OAUTH_SETUP_HTML = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
@@ -89,7 +118,7 @@ def _session_user_id(request: Request) -> Optional[int]:
 @router.get("/auth/gitee/login")
 def gitee_oauth_login(request: Request):
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        return HTMLResponse(content=_GITEE_SAAS_DISABLED_HTML, status_code=403)
     if not oauth_config_ok():
         return HTMLResponse(content=_GITEE_OAUTH_SETUP_HTML, status_code=503)
     if not create_db_engine():
@@ -104,7 +133,7 @@ def gitee_oauth_login(request: Request):
 @router.get("/auth/gitee/callback")
 def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        return HTMLResponse(content=_GITEE_SAAS_DISABLED_HTML, status_code=403)
     if not code:
         raise HTTPException(400, "缺少 code")
     expected = request.session.get("oauth_state")
@@ -127,7 +156,7 @@ def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Op
 @router.post("/auth/logout")
 def logout(request: Request):
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
     request.session.clear()
     return {"ok": True}
 
@@ -167,7 +196,7 @@ def saas_me(request: Request):
 @router.post("/api/saas/gitee/sync-hooks")
 def saas_sync_hooks(request: Request) -> dict[str, Any]:
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
@@ -177,7 +206,7 @@ def saas_sync_hooks(request: Request) -> dict[str, Any]:
 @router.get("/api/saas/gitee/reports")
 def saas_reports(request: Request, limit: int = 50, offset: int = 0):
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
@@ -217,7 +246,7 @@ def saas_reports(request: Request, limit: int = 50, offset: int = 0):
 @router.get("/api/saas/gitee/reports/{report_id}")
 def saas_report_detail(request: Request, report_id: int):
     if not _saas_enable_gitee():
-        raise HTTPException(404, "not found")
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
     uid = _session_user_id(request)
     if not uid:
         raise HTTPException(401, "请先登录")
