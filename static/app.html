@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>审查报告 · AI PR Review</title>
+  <title>GitHub 审查控制台 · AI PR Review</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
@@ -53,9 +53,9 @@
   </style>
 </head>
 <body>
-  <h1>审查控制台</h1>
-  <p class="sub">安装/连接 GitHub App 后，PR 打开/更新会自动审查并在 PR 上显示 Check；报告保存在此处，点击 <strong>Agree</strong> 后才会回写评论到 PR。LLM 使用服务端配置的 Key。</p>
-  <p class="sub"><a href="/">返回首页</a> · <a href="/manual">手动审查</a></p>
+  <h1>GitHub 审查控制台</h1>
+  <p class="sub">本页仅服务 <strong>GitHub App</strong>：安装/连接后，PR 打开/更新会自动审查并在 PR 上显示 Check；报告保存在此处，点击 <strong>Agree</strong> 后才会回写评论到 PR。LLM 使用服务端配置的 Key。</p>
+  <p class="sub"><a href="/">返回首页</a> · <a href="/app-gitee">Gitee 控制台</a>（合并请求 / OAuth） · <a href="/manual">手动审查</a></p>
 
   <div id="auth" class="card"></div>
   <div id="reports" class="card" style="display:none;">
@@ -77,9 +77,10 @@
       const me = await j("/api/saas/me");
       if (!me.authenticated) {
         authEl.innerHTML = `
-          <p>尚未登录。</p>
+          <p>尚未登录（GitHub）。</p>
           <p><a class="login-link" href="/auth/github/install">安装/连接 GitHub App</a></p>
           <p class="meta">完成安装后会自动跳回本页。之后在已安装仓库创建/更新 PR，会自动生成报告与 Check Run。</p>
+          <p class="meta" style="margin-top:0.75rem;">要用 <strong>Gitee</strong>？请打开 <a href="/app-gitee">Gitee 控制台</a>（与 GitHub 分开展示，避免混用）。</p>
         `;
         document.getElementById("reports").style.display = "none";
         return;
