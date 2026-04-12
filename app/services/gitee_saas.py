@@ -25,8 +25,8 @@ GITEE_OAUTH_AUTHORIZE = "https://gitee.com/oauth/authorize"
 GITEE_OAUTH_TOKEN = "https://gitee.com/oauth/token"
 GITEE_API = "https://gitee.com/api/v5"
 
-_DEFAULT_HTTP_TIMEOUT_SEC = 30
-_DEFAULT_HTTP_RETRIES = 1  # total attempts = 1 + retries
+_DEFAULT_HTTP_TIMEOUT_SEC = 45
+_DEFAULT_HTTP_RETRIES = 2  # total attempts = 1 + retries
 
 
 def _http_timeout() -> httpx.Timeout:
@@ -34,8 +34,15 @@ def _http_timeout() -> httpx.Timeout:
         total = float(os.getenv("GITEE_HTTP_TIMEOUT_SEC", str(_DEFAULT_HTTP_TIMEOUT_SEC)))
     except ValueError:
         total = float(_DEFAULT_HTTP_TIMEOUT_SEC)
-    # Split timeouts so handshake/connect doesn't consume whole budget.
-    return httpx.Timeout(timeout=total, connect=min(10.0, total), read=total, write=total, pool=total)
+    total = max(5.0, min(120.0, total))
+    # Do not cap connect below total: TLS handshake to gitee.com from overseas often needs the full budget.
+    return httpx.Timeout(timeout=total, connect=total, read=total, write=total, pool=total)
+
+
+def _gitee_http_client() -> httpx.Client:
+    """HTTPS_PROXY / HTTP_PROXY respected (trust_env). Optional GITEE_HTTPS_PROXY overrides HTTPS only."""
+    proxy = os.getenv("GITEE_HTTPS_PROXY", "").strip() or None
+    return httpx.Client(timeout=_http_timeout(), trust_env=True, proxy=proxy)
 
 
 def _http_retries() -> int:
@@ -58,7 +65,13 @@ def _request_with_retry(fn, *, op: str) -> Any:
                 time.sleep(0.3 * attempt)
                 continue
             break
-    raise RuntimeError(f"{op} 网络超时/握手失败（请检查出站网络/DNS/IPv6/代理）：{last_err}") from last_err
+    raise RuntimeError(
+        f"{op} 网络超时/握手失败：{last_err}。"
+        " 海外机房（如 Railway）访问 gitee.com 常出现 TLS 握手超时，与 OAuth 配置无关。"
+        " 可尝试：增大 GITEE_HTTP_TIMEOUT_SEC（如 60）、GITEE_HTTP_RETRIES（如 3）；"
+        "配置 HTTPS_PROXY 或在环境变量 GITEE_HTTPS_PROXY 指定可访问 Gitee 的 HTTPS 代理；"
+        "或将本服务迁到国内/香港等出站更友好的环境；或改用 GitHub App。"
+    ) from last_err
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -103,7 +116,7 @@ def exchange_code_for_token(code: str) -> dict[str, Any]:
     cid = os.getenv("GITEE_OAUTH_CLIENT_ID", "").strip()
     sec = os.getenv("GITEE_OAUTH_CLIENT_SECRET", "").strip()
     redir = os.getenv("GITEE_OAUTH_REDIRECT_URI", "").strip()
-    with httpx.Client(timeout=_http_timeout()) as client:
+    with _gitee_http_client() as client:
         r = _request_with_retry(
             lambda: client.post(
                 GITEE_OAUTH_TOKEN,
@@ -125,7 +138,7 @@ def exchange_code_for_token(code: str) -> dict[str, Any]:
 
 
 def fetch_gitee_user(access_token: str) -> dict[str, Any]:
-    with httpx.Client(timeout=_http_timeout()) as client:
+    with _gitee_http_client() as client:
         r = _request_with_retry(
             lambda: client.get(f"{GITEE_API}/user", params={"access_token": access_token}),
             op="读取 Gitee 用户",
@@ -145,7 +158,7 @@ def split_path_with_namespace(path_with_namespace: str) -> tuple[str, str]:
 
 
 def list_user_repos(access_token: str, *, page: int = 1, per_page: int = 100) -> list[dict[str, Any]]:
-    with httpx.Client(timeout=_http_timeout()) as client:
+    with _gitee_http_client() as client:
         r = _request_with_retry(
             lambda: client.get(
                 f"{GITEE_API}/user/repos",
@@ -167,7 +180,7 @@ def list_user_repos(access_token: str, *, page: int = 1, per_page: int = 100) ->
 
 def list_repo_hooks(access_token: str, owner: str, repo: str) -> list[dict[str, Any]]:
     eo, er = quote(owner, safe=""), quote(repo, safe="")
-    with httpx.Client(timeout=_http_timeout()) as client:
+    with _gitee_http_client() as client:
         r = _request_with_retry(
             lambda: client.get(
                 f"{GITEE_API}/repos/{eo}/{er}/hooks",
@@ -199,7 +212,7 @@ def create_repo_hook(
         "note_events": False,
         "merge_requests_events": True,
     }
-    with httpx.Client(timeout=_http_timeout()) as client:
+    with _gitee_http_client() as client:
         r = _request_with_retry(
             lambda: client.post(
                 f"{GITEE_API}/repos/{eo}/{er}/hooks",
