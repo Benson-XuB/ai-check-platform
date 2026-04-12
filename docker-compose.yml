@@ -20,3 +20,44 @@ services:
       # 容器内默认可写路径；持久化可改为挂载宿主机目录并同步修改 PRELAUNCH_WORKSPACE
       PRELAUNCH_WORKSPACE: ${PRELAUNCH_WORKSPACE:-/tmp/prelaunch}
     restart: unless-stopped
+
+  saas-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.saas
+    image: ai-pr-review-saas:latest
+    container_name: ai-pr-review-saas
+    ports:
+      - "${SAAS_HOST_PORT:-8001}:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: ${DATABASE_URL:-}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-in-production}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${SAAS_HOST_PORT:-8001}}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_INSTALL_URL: ${GITHUB_APP_INSTALL_URL:-}
+      SAAS_ENABLE_GITEE: ${SAAS_ENABLE_GITEE:-0}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      WEBHOOK_LLM_PROVIDER: ${WEBHOOK_LLM_PROVIDER:-}
+    restart: unless-stopped
+
+  prelaunch-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prelaunch
+    image: ai-pr-review-prelaunch:latest
+    container_name: ai-pr-review-prelaunch
+    ports:
+      - "${PRELAUNCH_HOST_PORT:-8002}:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PRELAUNCH_WORKSPACE: ${PRELAUNCH_WORKSPACE:-/tmp/prelaunch}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+    restart: unless-stopped

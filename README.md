@@ -54,7 +54,7 @@ uvicorn app.main:app --reload --port 8000
 **镜像内已自动 `pip install`，无需进容器再装依赖。**
 
 ```bash
-# 仅 Docker：构建并运行
+# 仅 Docker：构建并运行（单体入口：SaaS + Prelaunch 都在一个进程里）
 docker build -t ai-pr-review .
 docker run -p 8000:8000 --env-file .env ai-pr-review
 # 无 .env 时可省略 --env-file（仅打开页面；审查 / Webhook 需密钥）
@@ -67,6 +67,23 @@ docker compose up --build -d
 访问 http://localhost:8000（若改了端口则使用 `HOST_PORT`）。多用户可同时使用同一实例，凭证由前端输入或 localStorage 保存，Webhook 等用服务端环境变量。
 
 **Stg / 生产启用「PR 创建自动审查」**：只要部署可用 HTTPS，配置环境变量 + Gitee WebHook 即可，无需改代码。参见 [docs/stg-deploy.md](docs/stg-deploy.md)，环境变量模板见仓库根目录 [.env.example](.env.example)。
+
+## 拆分部署（同 repo 两个 service）
+
+为避免 Prelaunch 与 SaaS 的依赖/部署互相影响，仓库额外提供两个独立入口：
+
+- **SaaS 服务**：`uvicorn apps.saas_api.main:app`
+- **Prelaunch 服务**：`uvicorn apps.prelaunch_api.main:app`
+
+对应 Dockerfile：
+
+- `Dockerfile.saas`：不包含 CLI 扫描器
+- `Dockerfile.prelaunch`：包含 gitleaks/trivy + PDF 依赖
+
+Railway 示例配置文件：
+
+- `railway.saas.json`（指向 `Dockerfile.saas`）
+- `railway.prelaunch.json`（指向 `Dockerfile.prelaunch`）
 
 ## 产品收敛：Go / No-Go 规格
 
