@@ -6,6 +6,9 @@ services:
     build: .
     image: ai-pr-review:latest
     container_name: ai-pr-review
+    # Linux 上容器访问宿主机 PostgreSQL：DATABASE_URL 主机用 host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${HOST_PORT:-8000}:8000"
     environment:
@@ -27,6 +30,8 @@ services:
       dockerfile: Dockerfile.saas
     image: ai-pr-review-saas:latest
     container_name: ai-pr-review-saas
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${SAAS_HOST_PORT:-8001}:8000"
     environment:
