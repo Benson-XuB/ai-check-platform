@@ -123,6 +123,8 @@ def gitee_oauth_login(request: Request):
         return HTMLResponse(content=_GITEE_OAUTH_SETUP_HTML, status_code=503)
     if not create_db_engine():
         return HTMLResponse(content=_DATABASE_SETUP_HTML, status_code=503)
+    # 登录成功后的落地页（默认须为 Gitee 控制台，勿用 /app 以免与 GitHub 混用）
+    request.session["post_login_redirect"] = "/app-gitee"
     state = make_signed_oauth_state()
     from app.services.gitee_saas import gitee_oauth_authorize_url
 
@@ -150,7 +152,7 @@ def gitee_oauth_callback(request: Request, code: Optional[str] = None, state: Op
         logger.exception("Gitee OAuth callback failed")
         raise HTTPException(400, str(e)) from e
     request.session["user_id"] = user.id
-    next_url = request.session.pop("post_login_redirect", "/app")
+    next_url = request.session.pop("post_login_redirect", "/app-gitee")
     return RedirectResponse(url=next_url, status_code=302)
 
 
