@@ -3,7 +3,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 此步是 apt 从 Debian 官方源拉系统包（git、curl 等），在国内常极慢。
+# 构建前设 USE_CN_APT_MIRROR=1（见 docker-compose / .env.example）可换清华 Debian 镜像。
+ARG USE_CN_APT_MIRROR=
+RUN set -eux; \
+    if [ "${USE_CN_APT_MIRROR}" = "1" ]; then \
+      for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+        [ -f "$f" ] || continue; \
+        sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' "$f"; \
+        sed -i 's/security.debian.org/mirrors.tuna.tsinghua.edu.cn/g' "$f"; \
+      done; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \

@@ -29,6 +29,8 @@ services:
       context: .
       dockerfile: Dockerfile.saas
       args:
+        # 构建阶段：国内建议1，apt 换清华 Debian 源（否则 apt 走 deb.debian.org 很慢）
+        USE_CN_APT_MIRROR: ${USE_CN_APT_MIRROR:-}
         # 构建阶段 pip 用（弱网可设清华源等，见 Dockerfile.saas 注释）
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
