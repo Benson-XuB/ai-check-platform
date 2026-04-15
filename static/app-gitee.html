@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <title>Gitee 审查控制台 · AI PR Review</title>
   <style>
     * { box-sizing: border-box; }
@@ -36,7 +38,10 @@
 </head>
 <body>
   <h1>Gitee 审查控制台</h1>
-  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。<strong>审查用模型与 API Key</strong>在 <a href="/app-gitee/llm">模型与密钥页</a> 配置（登录后也可用下方卡片进入）。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
+  <p class="sub" style="margin-bottom:0.75rem;padding:0.65rem 0.85rem;background:#fff1f2;border:1px solid #fecdd3;border-radius:10px;line-height:1.5;">
+    <strong>模型与 API Key：</strong>请打开 <a href="/app-gitee/llm">模型与密钥页</a>（需先 Gitee 登录）。未配置时使用服务端环境变量中的默认密钥。
+  </p>
+  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
   <p class="sub"><a href="/">返回首页</a> · <a href="/app">GitHub 控制台</a> · <a href="/manual">手动审查</a> · <a href="/app-gitee/llm">模型与密钥</a> · <a href="/app-gitee/onboarding">补审已有 Open MR</a></p>
 
   <div id="auth" class="card"></div>
