@@ -32,13 +32,13 @@ ENV PYTHONUNBUFFERED=1 \
 ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
 
-COPY requirements.txt .
+COPY requirements-saas.txt requirements-saas.txt
 RUN set -eux; \
     if [ -n "${PIP_INDEX_URL}" ] && [ -n "${PIP_TRUSTED_HOST}" ]; then \
       pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 \
-        -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -r requirements.txt; \
+        -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -r requirements-saas.txt; \
     else \
-      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements.txt; \
+      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements-saas.txt; \
     fi
 
 COPY app/ app/

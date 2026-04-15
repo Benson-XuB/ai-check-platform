@@ -1,3 +1,5 @@
+# SaaS 镜像专用（apps/saas_api）：与 requirements.txt 对齐运行时依赖，
+# 不含 Prelaunch 扫描 CLI（semgrep ~70MB+、bandit、pip-audit）及仅 Prelaunch 使用的 weasyprint。
 fastapi>=0.115.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
@@ -16,9 +18,3 @@ tree-sitter-languages>=1.10.0
 pyright>=1.1.0
 pgvector>=0.4.2
 jinja2>=3.1.0
-weasyprint>=62.0
-# SaaS 单独镜像见 requirements-saas.txt（不含下方扫描 CLI，构建更快）
-# Prelaunch 扫描（随镜像/本机 CLI 亦可）
-bandit[toml]>=1.7.8
-pip-audit>=2.6.0
-semgrep>=1.45.0
