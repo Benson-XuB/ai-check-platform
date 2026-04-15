@@ -9,7 +9,12 @@
 
 services:
   ai-pr-review:
-    build: .
+    build:
+      context: .
+      args:
+        USE_CN_APT_MIRROR: ${USE_CN_APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     image: ai-pr-review:latest
     container_name: ai-pr-review
     # Linux 上容器访问宿主机 PostgreSQL：DATABASE_URL 主机用 host.docker.internal
