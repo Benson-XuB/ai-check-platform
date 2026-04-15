@@ -36,8 +36,8 @@
 </head>
 <body>
   <h1>Gitee 审查控制台</h1>
-  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
-  <p class="sub"><a href="/">返回首页</a> · <a href="/app">GitHub 控制台</a> · <a href="/manual">手动审查</a></p>
+  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。<strong>审查用模型与 API Key</strong>在 <a href="/app-gitee/llm">模型与密钥页</a> 配置（登录后也可用下方卡片进入）。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
+  <p class="sub"><a href="/">返回首页</a> · <a href="/app">GitHub 控制台</a> · <a href="/manual">手动审查</a> · <a href="/app-gitee/llm">模型与密钥</a> · <a href="/app-gitee/onboarding">补审已有 Open MR</a></p>
 
   <div id="auth" class="card"></div>
   <div id="onboardingQuick" class="card" style="display:none;">
