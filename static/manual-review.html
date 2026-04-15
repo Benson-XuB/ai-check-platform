@@ -187,6 +187,32 @@
       padding-right: 2rem;
     }
 
+    /* 审查模型：与下方 Key 强关联，单独突出 */
+    #llmPreset {
+      font-size: 1rem;
+      font-weight: 500;
+      min-height: 2.85rem;
+      border: 2px solid var(--accent);
+      background-color: var(--surface-elevated);
+    }
+    #llmPreset:focus {
+      border-color: var(--accent-hover);
+    }
+    .flow-hint {
+      margin: 0 0 1rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: var(--radius-sm);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.875rem;
+      font-weight: 600;
+      line-height: 1.45;
+    }
+    #llmPresetWarn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+
     .hint {
       margin: 0.4rem 0 0;
       font-size: 0.8125rem;
@@ -454,7 +480,7 @@
   <div class="page">
     <header class="masthead">
       <h1>手动审查</h1>
-      <p class="lede">高级模式：自备 VCS Token、LLM Key 与 PR 链接，审查结果可逐条发回 PR。日常使用请从<a href="/">首页</a>用 Gitee 登录。</p>
+      <p class="lede">高级模式：自备 VCS Token；在下方<strong>先选审查模型</strong>，再填<strong>该模型对应厂商</strong>的 API Key，最后贴 PR 链接。审查结果可逐条发回 PR。日常自动审查请从<a href="/">首页</a>用 Gitee 登录。</p>
       <div class="top-links">
         <a href="/">返回首页</a>
         <a href="/app-gitee">Gitee 控制台</a>
@@ -464,6 +490,7 @@
 
     <section class="card" aria-labelledby="sec-connect">
       <h2 id="sec-connect"><span class="step" aria-hidden="true">1</span>连接与凭证</h2>
+      <p class="flow-hint">① 选择审查模型 → ② 填写该模型对应厂商的 API Key → ③ 粘贴 PR 链接</p>
       <div class="field">
         <label for="vcsPlatform">平台</label>
         <select id="vcsPlatform">
@@ -476,12 +503,15 @@
         <input type="password" id="vcsToken" autocomplete="off" placeholder="Gitee 设置 → 私人令牌">
       </div>
       <div class="field">
-        <label for="llmPreset">审查模型</label>
-        <select id="llmPreset"></select>
-        <p class="hint" id="llmPresetHint">列表与登录后「模型与密钥」一致；请选择与下方 API Key 对应的厂商。</p>
+        <label for="llmPreset">审查模型（必选）</label>
+        <select id="llmPreset" aria-describedby="llmPresetHint">
+          <option value="__smart_default__" data-provider="dashscope" data-api-model="">通义千问 · 默认智能审查（多 pass + 投票）</option>
+        </select>
+        <p class="hint" id="llmPresetHint">与控制台「模型与密钥」同源列表。切换模型后，请填写<strong>该厂商</strong>的 Key。</p>
+        <p class="hint" id="llmPresetWarn" style="display:none;"></p>
       </div>
       <div class="field">
-        <label for="llmKey" id="llmKeyLabel">大模型 API Key</label>
+        <label for="llmKey" id="llmKeyLabel">所选模型的 API Key</label>
         <input type="password" id="llmKey" autocomplete="off" placeholder="加载页面后显示说明">
         <p class="hint" id="llmHint">密钥由您自备。自建部署可通过环境变量设置站点默认厂商（仅影响首次打开时的默认选项）。</p>
       </div>
@@ -570,6 +600,39 @@
     window.__llmCfgLoaded = false;
     window.__llmPresets = [];
     window.__llmPresetsLoaded = false;
+    window.__llmPresetsFromFallback = false;
+
+    /** 无法请求 /api/saas/llm/presets 时的精简列表（与站内预设一致，仅条数较少） */
+    const FALLBACK_LLM_PRESETS = [
+      { id: "dashscope:qwen-turbo", provider: "dashscope", api_model: "qwen-turbo", label: "通义 · qwen-turbo", group: "国内 · 通义千问" },
+      { id: "dashscope:qwen-plus", provider: "dashscope", api_model: "qwen-plus", label: "通义 · qwen-plus", group: "国内 · 通义千问" },
+      { id: "dashscope:qwen-max", provider: "dashscope", api_model: "qwen-max", label: "通义 · qwen-max", group: "国内 · 通义千问" },
+      { id: "dashscope:qwen-long", provider: "dashscope", api_model: "qwen-long", label: "通义 · qwen-long", group: "国内 · 通义千问" },
+      { id: "kimi:moonshot-v1-32k", provider: "kimi", api_model: "moonshot-v1-32k", label: "Kimi · moonshot-v1-32k", group: "国内 · Kimi" },
+      { id: "kimi:moonshot-v1-128k", provider: "kimi", api_model: "moonshot-v1-128k", label: "Kimi · moonshot-v1-128k", group: "国内 · Kimi" },
+      {
+        id: "deepseek-official:deepseek-chat",
+        provider: "litellm",
+        api_model: "deepseek/deepseek-chat",
+        label: "DeepSeek 官方 · deepseek-chat",
+        group: "国内 · DeepSeek",
+      },
+      { id: "openai:gpt-4o-mini", provider: "litellm", api_model: "openai/gpt-4o-mini", label: "OpenAI · gpt-4o-mini", group: "国际 · OpenAI" },
+      {
+        id: "anthropic:claude-3-5-sonnet-20241022",
+        provider: "litellm",
+        api_model: "anthropic/claude-3-5-sonnet-20241022",
+        label: "Anthropic · Claude 3.5 Sonnet",
+        group: "国际 · Anthropic",
+      },
+      {
+        id: "gemini:gemini-2.0-flash",
+        provider: "litellm",
+        api_model: "gemini/gemini-2.0-flash",
+        label: "Google · gemini-2.0-flash",
+        group: "国际 · Google Gemini",
+      },
+    ];
 
     async function ensurePublicConfig() {
       if (window.__llmCfgLoaded) return window.__llmCfg;
@@ -589,13 +652,19 @@
 
     async function loadLlmPresets() {
       if (window.__llmPresetsLoaded) return window.__llmPresets;
+      window.__llmPresetsFromFallback = false;
+      window.__llmPresets = [];
       try {
         const r = await fetch(API + "/api/saas/llm/presets");
         if (r.ok) {
           const j = await r.json();
-          if (j.ok && Array.isArray(j.data)) window.__llmPresets = j.data;
+          if (j.ok && Array.isArray(j.data) && j.data.length) window.__llmPresets = j.data;
         }
       } catch (_) {}
+      if (!window.__llmPresets.length) {
+        window.__llmPresets = FALLBACK_LLM_PRESETS.slice();
+        window.__llmPresetsFromFallback = true;
+      }
       window.__llmPresetsLoaded = true;
       return window.__llmPresets;
     }
@@ -628,6 +697,15 @@
           og.appendChild(o);
         }
         sel.appendChild(og);
+      }
+      const warnEl = document.getElementById("llmPresetWarn");
+      if (window.__llmPresetsFromFallback) {
+        warnEl.style.display = "block";
+        warnEl.textContent =
+          "未能从服务器加载完整模型列表，已使用内置精简列表。请确认后端已启动且可访问 /api/saas/llm/presets；修复后刷新页面即可加载全部分组。";
+      } else {
+        warnEl.style.display = "none";
+        warnEl.textContent = "";
       }
     }
 
