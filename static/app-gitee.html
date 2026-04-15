@@ -38,23 +38,10 @@
 </head>
 <body>
   <h1>Gitee 审查控制台</h1>
-  <p class="sub" style="margin-bottom:0.75rem;padding:0.65rem 0.85rem;background:#fff1f2;border:1px solid #fecdd3;border-radius:10px;line-height:1.5;">
-    <strong>模型与 API Key：</strong>请打开 <a href="/app-gitee/llm">模型与密钥页</a>（需先 Gitee 登录）。未配置时使用服务端环境变量中的默认密钥。
-  </p>
   <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
-  <p class="sub"><a href="/">返回首页</a> · <a href="/app">GitHub 控制台</a> · <a href="/manual">手动审查</a> · <a href="/app-gitee/llm">模型与密钥</a> · <a href="/app-gitee/onboarding">补审已有 Open MR</a></p>
+  <p class="sub"><a href="/">返回首页</a> · <a href="/manual">手动审查</a></p>
 
   <div id="auth" class="card"></div>
-  <div id="onboardingQuick" class="card" style="display:none;">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem;">补审已有的 Open 合并请求</h2>
-    <p class="meta" style="margin:0;">WebHook 只会处理<strong>之后</strong>的新事件；若接入前仓库里已有打开的 MR，可到专用页勾选后再审查（不自动跑模型）。日常新 MR 仍走 WebHook。</p>
-    <p style="margin:0.75rem 0 0;"><a class="login-link" href="/app-gitee/onboarding">打开补审页面</a></p>
-  </div>
-  <div id="llmQuick" class="card" style="display:none;">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem;">审查模型（可选）</h2>
-    <div id="llmQuickBody" class="meta">加载中…</div>
-    <p style="margin:0.75rem 0 0;"><a class="login-link" href="/app-gitee/llm">模型与 API Key 设置</a></p>
-  </div>
   <div id="reports" class="card" style="display:none;">
     <h2 style="margin:0 0 0.75rem;font-size:1rem;">最近报告</h2>
     <ul class="reports" id="reportList"></ul>
@@ -71,23 +58,6 @@
       return r.json();
     }
 
-    async function refreshLlmQuick() {
-      const wrap = document.getElementById("llmQuick");
-      const body = document.getElementById("llmQuickBody");
-      const cr = await j("/api/saas/llm/credentials");
-      if (!cr.ok) {
-        body.textContent = "无法加载模型设置摘要。";
-        return;
-      }
-      const items = (cr.data && cr.data.items) || [];
-      const active = items.find((i) => i.is_active);
-      if (active) {
-        body.innerHTML = "当前默认审查模型：<strong>" + String(active.display_label || "").replace(/</g, "&lt;") + "</strong>";
-      } else {
-        body.textContent = "未设置自有模型与 Key，自动审查将使用站点默认密钥。";
-      }
-    }
-
     async function refresh() {
       const authEl = document.getElementById("auth");
       const me = await j("/api/saas/gitee/me");
@@ -97,8 +67,6 @@
           <p><a class="login-link" href="/auth/gitee/login">使用 Gitee 登录</a></p>
         `;
         document.getElementById("reports").style.display = "none";
-        document.getElementById("llmQuick").style.display = "none";
-        document.getElementById("onboardingQuick").style.display = "none";
         return;
       }
       const u = me.user;
@@ -130,10 +98,6 @@
         await j("/auth/logout", { method: "POST" });
         refresh();
       };
-
-      document.getElementById("onboardingQuick").style.display = "block";
-      document.getElementById("llmQuick").style.display = "block";
-      await refreshLlmQuick();
 
       document.getElementById("reports").style.display = "block";
       const list = await j("/api/saas/gitee/reports?limit=" + RECENT_REPORTS);
