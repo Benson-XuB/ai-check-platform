@@ -64,6 +64,8 @@ cp .env.example .env   # 按需填写
 docker compose up --build -d
 ```
 
+默认 Compose 只启动 **ai-pr-review**（8000）与 **saas-api**（8001）。**prelaunch-api**（8002，含 semgrep 等大依赖、构建慢）需显式启用：`docker compose --profile prelaunch up -d`。国内构建建议在 `.env` 中设置 `USE_CN_APT_MIRROR=1` 与清华 PyPI（见 `.env.example`）。
+
 访问 http://localhost:8000（若改了端口则使用 `HOST_PORT`）。多用户可同时使用同一实例，凭证由前端输入或 localStorage 保存，Webhook 等用服务端环境变量。
 
 **Stg / 生产启用「PR 创建自动审查」**：只要部署可用 HTTPS，配置环境变量 + Gitee WebHook 即可，无需改代码。参见 [docs/stg-deploy.md](docs/stg-deploy.md)，环境变量模板见仓库根目录 [.env.example](.env.example)。

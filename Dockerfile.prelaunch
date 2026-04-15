@@ -1,10 +1,19 @@
+# syntax=docker/dockerfile:1.4
 # Prelaunch service image: includes CLI scanners and PDF deps
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# certs, git, curl, Node/npm (npm audit), WeasyPrint runtime libs (PDF)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG USE_CN_APT_MIRROR=
+RUN set -eux; \
+    if [ "${USE_CN_APT_MIRROR}" = "1" ]; then \
+      for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+        [ -f "$f" ] || continue; \
+        sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' "$f"; \
+        sed -i 's/security.debian.org/mirrors.tuna.tsinghua.edu.cn/g' "$f"; \
+      done; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
@@ -18,13 +27,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     && rm -rf /var/lib/apt/lists/*
 
+# 构建时用 BuildKit 缓存 pip wheel，重建同一 requirements 会快很多（需 DOCKER_BUILDKIT=1，Compose 默认已开）
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_ROOT_USER_ACTION=ignore
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_DEFAULT_TIMEOUT=300
+
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    set -eux; \
+    if [ -n "${PIP_INDEX_URL}" ] && [ -n "${PIP_TRUSTED_HOST}" ]; then \
+      pip install --root-user-action=ignore --default-timeout=300 --retries 10 \
+        -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -r requirements.txt; \
+    else \
+      pip install --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements.txt; \
+    fi
 
 # Prelaunch: gitleaks + trivy binaries
 ARG GITLEAKS_VERSION=8.21.2
@@ -51,4 +71,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
     CMD python -c "import os,urllib.request;p=os.environ.get('PORT','8000');urllib.request.urlopen(f'http://127.0.0.1:{p}/',timeout=4).read(16)" || exit 1
 
 CMD ["sh", "-c", "exec uvicorn apps.prelaunch_api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
-

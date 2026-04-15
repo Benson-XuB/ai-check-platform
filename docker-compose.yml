@@ -1,5 +1,11 @@
 # 一键：docker compose up --build -d
 # 在项目根目录放置 .env（可复制 .env.example），Compose 会自动读入并传入容器
+#
+# 默认只拉起 ai-pr-review + saas-api。prelaunch-api 会安装 semgrep/bandit 等大依赖，构建很慢，
+# 已归入 profile「prelaunch」；需要整仓扫描时再执行：
+#   docker compose --profile prelaunch up -d
+# 或仅构建/启动 SaaS（最快）：
+#   docker compose up -d saas-api
 
 services:
   ai-pr-review:
@@ -75,9 +81,15 @@ services:
     restart: unless-stopped
 
   prelaunch-api:
+    profiles:
+      - prelaunch
     build:
       context: .
       dockerfile: Dockerfile.prelaunch
+      args:
+        USE_CN_APT_MIRROR: ${USE_CN_APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     image: ai-pr-review-prelaunch:latest
     container_name: ai-pr-review-prelaunch
     ports:
