@@ -3,6 +3,7 @@
 import base64
 import re
 from typing import List, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -228,8 +229,11 @@ def post_comment(
     if path and line is not None and "path" not in payload:
         payload["body"] = f"**[{path} 第 {line} 行]**\n\n{comment}"
 
+    eo, er = quote(owner, safe=""), quote(repo, safe="")
+    comments_url = f"{GITEE_API}/repos/{eo}/{er}/pulls/{number}/comments"
+
     r = requests.post(
-        f"{GITEE_API}/repos/{owner}/{repo}/pulls/{number}/comments",
+        comments_url,
         headers={**headers, "Content-Type": "application/json"},
         json=payload,
         timeout=30,
@@ -237,7 +241,7 @@ def post_comment(
     if r.status_code not in (200, 201) and "path" in payload:
         send_data = {k: str(v) for k, v in payload.items()}
         r = requests.post(
-            f"{GITEE_API}/repos/{owner}/{repo}/pulls/{number}/comments",
+            comments_url,
             headers=headers,
             data=send_data,
             timeout=30,
@@ -245,7 +249,7 @@ def post_comment(
     if r.status_code not in (200, 201) and "path" in payload:
         payload_fb = {"body": payload.get("body", comment)}
         r2 = requests.post(
-            f"{GITEE_API}/repos/{owner}/{repo}/pulls/{number}/comments",
+            comments_url,
             headers=headers,
             json=payload_fb,
             timeout=30,

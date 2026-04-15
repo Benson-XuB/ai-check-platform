@@ -457,7 +457,7 @@
       <p class="lede">高级模式：自备 VCS Token、LLM Key 与 PR 链接，审查结果可逐条发回 PR。日常使用请从<a href="/">首页</a>用 Gitee 登录。</p>
       <div class="top-links">
         <a href="/">返回首页</a>
-        <a href="/app">Gitee 控制台</a>
+        <a href="/app-gitee">Gitee 控制台</a>
         <a href="/prelaunch">Prelaunch 整仓扫描</a>
       </div>
     </header>
@@ -476,9 +476,14 @@
         <input type="password" id="vcsToken" autocomplete="off" placeholder="Gitee 设置 → 私人令牌">
       </div>
       <div class="field">
+        <label for="llmPreset">审查模型</label>
+        <select id="llmPreset"></select>
+        <p class="hint" id="llmPresetHint">列表与登录后「模型与密钥」一致；请选择与下方 API Key 对应的厂商。</p>
+      </div>
+      <div class="field">
         <label for="llmKey" id="llmKeyLabel">大模型 API Key</label>
         <input type="password" id="llmKey" autocomplete="off" placeholder="加载页面后显示说明">
-        <p class="hint" id="llmHint">默认使用通义千问；密钥由您自备，本站不提供代充值。自建部署可通过环境变量切换默认厂商。</p>
+        <p class="hint" id="llmHint">密钥由您自备。自建部署可通过环境变量设置站点默认厂商（仅影响首次打开时的默认选项）。</p>
       </div>
       <div class="field">
         <label for="prUrl">PR 链接</label>
@@ -493,7 +498,7 @@
         <input type="checkbox" id="useDefaultReview" checked>
         <span class="opt-body">
           默认智能审查
-          <span class="opt-sub">通义：多 pass + 投票；其他厂商：单次上下文审查（由部署默认 LLM 决定）</span>
+          <span class="opt-sub">仅当上面选择「通义 · 默认智能审查」且为通义 Key 时走多 pass + 投票；任选具体模型时为该模型的单次审查（Kimi / LiteLLM 等均为单次）。</span>
         </span>
       </label>
 
@@ -563,6 +568,8 @@
       llm_key_label: "通义千问 API Key（DashScope）",
     };
     window.__llmCfgLoaded = false;
+    window.__llmPresets = [];
+    window.__llmPresetsLoaded = false;
 
     async function ensurePublicConfig() {
       if (window.__llmCfgLoaded) return window.__llmCfg;
@@ -578,6 +585,111 @@
       } catch (_) {}
       window.__llmCfgLoaded = true;
       return window.__llmCfg;
+    }
+
+    async function loadLlmPresets() {
+      if (window.__llmPresetsLoaded) return window.__llmPresets;
+      try {
+        const r = await fetch(API + "/api/saas/llm/presets");
+        if (r.ok) {
+          const j = await r.json();
+          if (j.ok && Array.isArray(j.data)) window.__llmPresets = j.data;
+        }
+      } catch (_) {}
+      window.__llmPresetsLoaded = true;
+      return window.__llmPresets;
+    }
+
+    function rebuildLlmPresetSelect() {
+      const sel = document.getElementById("llmPreset");
+      sel.innerHTML = "";
+      const opt0 = document.createElement("option");
+      opt0.value = "__smart_default__";
+      opt0.textContent = "通义千问 · 默认智能审查（多 pass + 投票）";
+      opt0.dataset.provider = "dashscope";
+      opt0.dataset.apiModel = "";
+      sel.appendChild(opt0);
+
+      const byGroup = new Map();
+      for (const p of window.__llmPresets || []) {
+        const g = p.group || "其他";
+        if (!byGroup.has(g)) byGroup.set(g, []);
+        byGroup.get(g).push(p);
+      }
+      for (const [g, items] of byGroup) {
+        const og = document.createElement("optgroup");
+        og.label = g;
+        for (const p of items) {
+          const o = document.createElement("option");
+          o.value = p.id;
+          o.textContent = p.label || p.id;
+          o.dataset.provider = p.provider || "";
+          o.dataset.apiModel = p.api_model || "";
+          og.appendChild(o);
+        }
+        sel.appendChild(og);
+      }
+    }
+
+    function getLlmChoice() {
+      const sel = document.getElementById("llmPreset");
+      const opt = sel.selectedOptions[0];
+      if (!opt) {
+        return { provider: "dashscope", apiModel: null, smartDefault: true };
+      }
+      const smartDefault = opt.value === "__smart_default__";
+      const provider = (opt.dataset.provider || "dashscope").trim() || "dashscope";
+      const raw = (opt.dataset.apiModel || "").trim();
+      const apiModel = raw ? raw : null;
+      return { provider, apiModel, smartDefault };
+    }
+
+    function applyPresetKeyHint() {
+      const choice = getLlmChoice();
+      const labels = {
+        dashscope: "DashScope / 通义百炼 API Key",
+        kimi: "Kimi（月之暗面）API Key",
+        litellm: "API Key（与所选 LiteLLM 模型对应厂商）",
+      };
+      document.getElementById("llmKeyLabel").textContent = labels[choice.provider] || labels.dashscope;
+      const ph = {
+        dashscope: "阿里云百炼 / DashScope API Key",
+        kimi: "月之暗面开放平台 API Key",
+        litellm: "如 OpenAI / Anthropic / Gemini / DeepSeek 等密钥",
+      };
+      document.getElementById("llmKey").placeholder = ph[choice.provider] || ph.dashscope;
+      let hint = "";
+      if (choice.smartDefault) {
+        hint = "与控制台自动审查一致：多 pass + 投票，需通义 DashScope Key。";
+      } else if (choice.provider === "litellm") {
+        hint = "单次审查；密钥将传入 LiteLLM，请与模型厂商一致。";
+      } else if (choice.provider === "kimi") {
+        hint = "单次审查；走 Moonshot 兼容接口。";
+      } else {
+        hint = "单次审查；使用所选通义模型。";
+      }
+      document.getElementById("llmHint").textContent = hint;
+    }
+
+    function pickDefaultPresetSelectValue(cfg) {
+      const sel = document.getElementById("llmPreset");
+      const prov = (cfg.default_llm_provider || "dashscope").trim();
+      if (prov === "dashscope") return "__smart_default__";
+      const want = prov === "kimi" ? "kimi" : "litellm";
+      const found = Array.from(sel.querySelectorAll("option")).find(
+        (o) => (o.dataset.provider || "").trim() === want
+      );
+      return found ? found.value : "__smart_default__";
+    }
+
+    function restoreLlmPresetSelection(cfg) {
+      const sel = document.getElementById("llmPreset");
+      let saved = null;
+      try {
+        saved = localStorage.getItem("ai-pr-review-llm-preset-id");
+      } catch (_) {}
+      const ok = (v) => v && Array.from(sel.options).some((o) => o.value === v);
+      sel.value = ok(saved) ? saved : pickDefaultPresetSelectValue(cfg);
     }
 
     const vcsHints = {
@@ -619,13 +731,14 @@
       return r.json();
     }
 
+    document.getElementById("llmPreset").addEventListener("change", applyPresetKeyHint);
+
     (async function bootPage() {
-      await ensurePublicConfig();
-      document.getElementById("llmKeyLabel").textContent = window.__llmCfg.llm_key_label;
-      document.getElementById("llmKey").placeholder =
-        window.__llmCfg.default_llm_provider === "kimi"
-          ? "月之暗面开放平台 API Key"
-          : "阿里云百炼 / DashScope API Key";
+      const cfg = await ensurePublicConfig();
+      await loadLlmPresets();
+      rebuildLlmPresetSelect();
+      restoreLlmPresetSelection(cfg);
+      applyPresetKeyHint();
       try {
         const plat = localStorage.getItem("ai-pr-review-vcs-platform") || "gitee";
         document.getElementById("vcsPlatform").value = plat;
@@ -652,7 +765,8 @@
 
     document.getElementById("btnReview").onclick = async () => {
       await ensurePublicConfig();
-      const cfg = window.__llmCfg;
+      await loadLlmPresets();
+      const choice = getLlmChoice();
       const platform = document.getElementById("vcsPlatform").value;
       const token = document.getElementById("vcsToken").value.trim();
       const key = document.getElementById("llmKey").value.trim();
@@ -676,6 +790,7 @@
         localStorage.setItem("ai-pr-review-vcs-platform", platform);
         localStorage.setItem(tokenStorageKey(platform), token);
         localStorage.setItem("ai-pr-review-llm-key", key);
+        localStorage.setItem("ai-pr-review-llm-preset-id", document.getElementById("llmPreset").value);
       } catch (_) {}
 
       setStatus("正在拉取 PR...");
@@ -699,8 +814,8 @@
         return;
       }
 
-      // 自动 code-RAG 索引（默认审查会用到）
-      if (useDefaultReview && cfg.default_llm_provider === "dashscope") {
+      // 自动 code-RAG 索引（仅通义默认智能多 pass 会用到）
+      if (useDefaultReview && choice.smartDefault) {
         try {
           setStatus("正在建立代码索引（Python chunks）...");
           await apiFetch("/api/rag/index-code-from-pr", {
@@ -724,12 +839,14 @@
           pr_title: res1.data.title,
           pr_body: res1.data.body,
           file_contexts: res1.data.file_contexts || {},
+          llm_provider: choice.provider,
           llm_api_key: key,
           use_mock: useMock,
           use_default_review: useDefaultReview,
           default_passes: 8,
           use_semantic_context: useSemanticContext && !useDefaultReview,
         };
+        if (choice.apiModel) reviewBody.llm_model = choice.apiModel;
         if (useDefaultReview && res1.data.owner && res1.data.repo) {
           reviewBody.repo_key = res1.data.owner + "/" + res1.data.repo;
         }

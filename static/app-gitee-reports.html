@@ -158,6 +158,11 @@
       document.getElementById("btnPrev2").onclick = goPrev;
       document.getElementById("btnNext2").onclick = goNext;
       await loadList();
+      const openRaw = new URLSearchParams(window.location.search).get("open");
+      const openId = parseInt(openRaw || "", 10);
+      if (!Number.isNaN(openId) && openId > 0) {
+        await loadDetail(openId);
+      }
     }
 
     init();

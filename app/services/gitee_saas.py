@@ -388,8 +388,72 @@ def run_saas_gitee_pr_review(
         return
 
     payload_json = json.dumps(review_out.get("data") or {}, ensure_ascii=False)
-    _save_report_ok(app_user_id, path_with_namespace, pr_number, head_sha, title_use, payload_json)
-    logger.info("SaaS 审查已写入报告 user=%s repo=%s pr=%s", app_user_id, path_with_namespace, pr_number)
+    report_id = _save_report_ok(
+        app_user_id, path_with_namespace, pr_number, head_sha, title_use, payload_json
+    )
+    logger.info(
+        "SaaS 审查已写入报告 user=%s repo=%s pr=%s report_id=%s",
+        app_user_id,
+        path_with_namespace,
+        pr_number,
+        report_id,
+    )
+    if report_id is not None:
+        _post_gitee_mr_review_link_comment(
+            gitee_access_token=gitee_access_token,
+            path_with_namespace=path_with_namespace,
+            pr_number=pr_number,
+            report_id=report_id,
+        )
+
+
+def _saas_gitee_post_review_link_enabled() -> bool:
+    """默认在 MR 上发一条带报告页链接的评论（便于从 Gitee 跳转并触发站内通知）；设 SAAS_GITEE_POST_REVIEW_LINK=0 可关闭。"""
+    raw = (os.getenv("SAAS_GITEE_POST_REVIEW_LINK") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _post_gitee_mr_review_link_comment(
+    *,
+    gitee_access_token: str,
+    path_with_namespace: str,
+    pr_number: int,
+    report_id: int,
+) -> None:
+    if not _saas_gitee_post_review_link_enabled():
+        return
+    try:
+        owner, repo = split_path_with_namespace(path_with_namespace)
+    except ValueError:
+        logger.warning("skip MR review link: bad path_with_namespace %s", path_with_namespace)
+        return
+    if pr_number < 1:
+        return
+    base = public_base_url().rstrip("/")
+    report_url = f"{base}/app-gitee/reports?open={report_id}"
+    body = (
+        f"🤖 **AI 审查已完成**，[查看报告与详细意见]({report_url}) 。\n\n"
+        "*（打开链接需已在审查平台使用同一 Gitee 账号登录。Gitee 可能会向关注此合并请求的用户发送评论通知。）*"
+    )
+    from app.services import gitee as gitee_svc
+
+    res = gitee_svc.post_comment(
+        owner, repo, str(pr_number), body, gitee_access_token
+    )
+    if not res.get("ok"):
+        logger.warning(
+            "Gitee MR 发布审查链接失败 %s PR#%s: %s",
+            path_with_namespace,
+            pr_number,
+            res.get("error"),
+        )
+    else:
+        logger.info(
+            "Gitee MR 已发布审查链接 %s PR#%s report_id=%s",
+            path_with_namespace,
+            pr_number,
+            report_id,
+        )
 
 
 def process_saas_merge_request_webhook(
@@ -399,8 +463,8 @@ def process_saas_merge_request_webhook(
     gitee_access_token: str,
 ) -> None:
     """
-    使用用户 OAuth token 拉 PR，使用平台环境变量 LLM Key 审查，写入 pr_review_reports；
-    不向 Gitee 发帖。
+    使用用户 OAuth token 拉 PR 并审查，写入 pr_review_reports；
+    默认在 MR 上发一条含报告页链接的评论（可用 SAAS_GITEE_POST_REVIEW_LINK=0 关闭）。
     """
     if not wh_svc.should_handle_merge_request_webhook(payload):
         return
@@ -457,10 +521,10 @@ def _save_report_ok(
     head_sha: Optional[str],
     pr_title: Optional[str],
     result_json: str,
-) -> None:
+) -> Optional[int]:
     engine = create_db_engine()
     if not engine:
-        return
+        return None
     from sqlalchemy.orm import Session
 
     with Session(engine) as session:
@@ -476,6 +540,8 @@ def _save_report_ok(
         )
         session.add(row)
         session.commit()
+        session.refresh(row)
+        return int(row.id)
 
 
 def _save_report_failed(
