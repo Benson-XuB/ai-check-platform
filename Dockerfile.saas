@@ -12,10 +12,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_ROOT_USER_ACTION=ignore
+    PIP_ROOT_USER_ACTION=ignore \
+    PIP_DEFAULT_TIMEOUT=300
+
+# 国内或弱网构建常遇 BrokenPipeError：加长超时 + 重试；必要时传入镜像：
+#   docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+#     --build-arg PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn saas-api
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
+RUN set -eux; \
+    if [ -n "${PIP_INDEX_URL}" ] && [ -n "${PIP_TRUSTED_HOST}" ]; then \
+      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 \
+        -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -r requirements.txt; \
+    else \
+      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements.txt; \
+    fi
 
 COPY app/ app/
 COPY static/ static/

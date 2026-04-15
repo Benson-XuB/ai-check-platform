@@ -28,6 +28,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.saas
+      args:
+        # 构建阶段 pip 用（弱网可设清华源等，见 Dockerfile.saas 注释）
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     image: ai-pr-review-saas:latest
     container_name: ai-pr-review-saas
     extra_hosts:
