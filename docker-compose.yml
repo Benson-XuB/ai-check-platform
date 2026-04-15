@@ -22,6 +22,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-}
       # 容器内默认可写路径；持久化可改为挂载宿主机目录并同步修改 PRELAUNCH_WORKSPACE
       PRELAUNCH_WORKSPACE: ${PRELAUNCH_WORKSPACE:-/tmp/prelaunch}
+    # 挂载 static：改 HTML/CSS 后无需重建镜像即可更新 /manual 等页面（与镜像内 /app/static 二选一，挂载优先）
+    volumes:
+      - ./static:/app/static:ro
     restart: unless-stopped
 
   saas-api:
@@ -67,6 +70,8 @@ services:
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       WEBHOOK_LLM_PROVIDER: ${WEBHOOK_LLM_PROVIDER:-}
+    volumes:
+      - ./static:/app/static:ro
     restart: unless-stopped
 
   prelaunch-api:
