@@ -144,7 +144,7 @@ class GiteeWatchedRepo(Base):
 
 
 class PrReviewReport(Base):
-    """SaaS：每次 Webhook 触发的审查结果（不写回 Gitee 评论）。"""
+    """SaaS：每次 Webhook/补审的审查结果；用户可在报告页逐条同意后回写 Gitee MR。"""
 
     __tablename__ = "pr_review_reports"
 
@@ -224,5 +224,23 @@ class GitHubPostedComment(Base):
 
 
 Index("idx_github_posted_binding", GitHubPostedComment.binding_id)
+
+
+class GiteePostedComment(Base):
+    """Gitee：用户「同意」后已回写到 MR 的单条意见（按报告 + 内容指纹去重）。"""
+
+    __tablename__ = "gitee_posted_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(Integer, ForeignKey("pr_review_reports.id"), nullable=False, index=True)
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (UniqueConstraint("report_id", "item_key", name="uq_gitee_posted_report_item"),)
+
+
+Index("idx_gitee_posted_report", GiteePostedComment.report_id)
 
 

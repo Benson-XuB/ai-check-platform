@@ -34,6 +34,15 @@
     .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
     .badge-ok { background: #d1fae5; color: #065f46; }
     .badge-fail { background: #fee2e2; color: #991b1b; }
+    table.findings { width: 100%; border-collapse: collapse; font-size: 0.8125rem; margin-top: 0.5rem; }
+    table.findings th, table.findings td { border: 1px solid #e7e5e4; padding: 0.5rem 0.45rem; vertical-align: top; text-align: left; }
+    table.findings th { background: #fafaf9; font-weight: 600; }
+    table.findings tr.posted { background: #f0fdf4; }
+    table.findings tr.rejected { opacity: 0.55; }
+    table.findings td.cell-suggestion { max-width: 14rem; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+    table.findings td.cell-actions { white-space: nowrap; }
+    table.findings td.cell-actions button { margin-top: 0; margin-bottom: 0.25rem; display: inline-block; }
+    table.findings code { font-size: 0.78rem; background: #f5f5f4; padding: 0.1em 0.25em; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -131,6 +140,92 @@
       document.getElementById("detail").style.display = "none";
     }
 
+    function escHtml(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function postGiteeReportComment(reportId, idx, btn) {
+      btn.disabled = true;
+      const r = await fetch(API + "/api/saas/gitee/reports/" + reportId + "/post-comment", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comment_index: idx }),
+      });
+      let data = {};
+      try {
+        data = await r.json();
+      } catch (_) {}
+      if (!r.ok || !data.ok) {
+        const msg = data.detail
+          ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))
+          : (data.error || "发帖失败");
+        alert(msg);
+        btn.disabled = false;
+        return;
+      }
+      const tr = btn.closest("tr");
+      tr.classList.remove("rejected");
+      tr.classList.add("posted");
+      tr.querySelector(".cell-actions").innerHTML = "<span class='meta'>已发帖</span>";
+    }
+
+    function wireGiteeCommentRows(reportId, rootEl) {
+      rootEl.querySelectorAll(".btn-agree").forEach((btn) => {
+        btn.onclick = () => postGiteeReportComment(reportId, parseInt(btn.dataset.idx, 10), btn);
+      });
+      rootEl.querySelectorAll(".btn-reject").forEach((btn) => {
+        btn.onclick = () => {
+          const tr = btn.closest("tr");
+          tr.classList.add("rejected");
+          tr.querySelector(".cell-actions").innerHTML = "<span class='meta'>已跳过</span>";
+        };
+      });
+    }
+
+    function renderGiteeCommentsTable(d, reportId) {
+      const comments = (d.result && Array.isArray(d.result.comments)) ? d.result.comments : [];
+      const posted = new Set((d.posted_comment_indexes || []).map((x) => parseInt(x, 10)));
+      if (!comments.length) {
+        if (d.result && typeof d.result === "object") {
+          return "<p class='meta'>无结构化意见</p><pre class='detail'>" + escHtml(JSON.stringify(d.result, null, 2)) + "</pre>";
+        }
+        return "";
+      }
+      let html = "<p>共 <strong>" + comments.length + "</strong> 条 · 同意发回合并请求或不同意跳过</p>";
+      html += "<table class='findings'><thead><tr>";
+      html += "<th>#</th><th>级别</th><th>类别</th><th>文件</th><th>行</th><th>意见</th><th>操作</th>";
+      html += "</tr></thead><tbody>";
+      comments.forEach((c, idx) => {
+        const isPosted = posted.has(idx);
+        const sug = (c.suggestion || c.content || "").trim();
+        html += "<tr class='" + (isPosted ? "posted" : "") + "'>";
+        html += "<td>" + (idx + 1) + "</td>";
+        html += "<td>" + escHtml(c.severity || "") + "</td>";
+        html += "<td>" + escHtml(c.category || "") + "</td>";
+        html += "<td><code>" + escHtml(c.file || "") + "</code></td>";
+        html += "<td>" + (c.line != null && c.line !== "" ? escHtml(String(c.line)) : "—") + "</td>";
+        html += "<td class='cell-suggestion'>" + escHtml(sug) + "</td>";
+        html += "<td class='cell-actions'>";
+        if (isPosted) {
+          html += "<span class='meta'>已发帖</span>";
+        } else {
+          html += "<button type='button' data-idx='" + idx + "' class='btn-agree'>同意</button> ";
+          html += "<button type='button' data-idx='" + idx + "' class='secondary btn-reject'>不同意</button>";
+        }
+        html += "</td></tr>";
+      });
+      html += "</tbody></table>";
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      wireGiteeCommentRows(reportId, wrap);
+      return wrap;
+    }
+
     async function loadDetail(id) {
       const dEl = document.getElementById("detail");
       dEl.style.display = "block";
@@ -141,15 +236,19 @@
         return;
       }
       const d = r.data;
-      let body = "<p><strong>" + d.path_with_namespace + "</strong> PR #" + d.pr_number + "</p>";
-      if (d.error) body += "<p class='err'>" + d.error + "</p>";
-      if (d.result && d.result.comments) {
-        body += "<p>共 " + d.result.comments.length + " 条意见</p><pre class='detail'>" +
-          JSON.stringify(d.result.comments, null, 2) + "</pre>";
-      } else if (d.result) {
-        body += "<pre class='detail'>" + JSON.stringify(d.result, null, 2) + "</pre>";
+      dEl.innerHTML = "";
+      const head = document.createElement("div");
+      head.innerHTML = "<p><strong>" + escHtml(d.path_with_namespace) + "</strong> PR #" + escHtml(String(d.pr_number)) + "</p>";
+      if (d.error) head.innerHTML += "<p class='err'>" + escHtml(d.error) + "</p>";
+      dEl.appendChild(head);
+      const tableHost = renderGiteeCommentsTable(d, id);
+      if (typeof tableHost === "string") {
+        const rest = document.createElement("div");
+        rest.innerHTML = tableHost;
+        dEl.appendChild(rest);
+      } else if (tableHost) {
+        dEl.appendChild(tableHost);
       }
-      dEl.innerHTML = body;
     }
 
     refresh();

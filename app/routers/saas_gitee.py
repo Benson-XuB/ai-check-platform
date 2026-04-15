@@ -24,6 +24,13 @@ from app.services.gitee_saas import (
     upsert_user_from_gitee_token,
 )
 from app.services.oauth_state import make_signed_oauth_state, verify_signed_oauth_state
+from app.services.api_rate_limit import enforce_vcs_post_comment
+from app.services.gitee_postback import (
+    gitee_comment_item_key,
+    parse_comments_from_report_json,
+    posted_item_keys_for_report,
+    post_one_gitee_report_comment,
+)
 from app.storage.db import create_db_engine
 from app.storage.models import AppUser, GiteeOAuthAccount, GiteeWatchedRepo, PrReviewReport
 
@@ -281,6 +288,11 @@ def saas_report_detail(request: Request, report_id: int):
                 parsed = json.loads(r.result_json)
             except json.JSONDecodeError:
                 parsed = None
+        comments_list = parse_comments_from_report_json(r.result_json)
+        posted_keys = posted_item_keys_for_report(session, r.id)
+        posted_comment_indexes = [
+            i for i, c in enumerate(comments_list) if gitee_comment_item_key(c) in posted_keys
+        ]
         return {
             "ok": True,
             "data": {
@@ -293,8 +305,48 @@ def saas_report_detail(request: Request, report_id: int):
                 "error": r.error,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "result": parsed,
+                "posted_comment_indexes": posted_comment_indexes,
             },
         }
+
+
+@router.post("/api/saas/gitee/reports/{report_id}/post-comment")
+def saas_gitee_report_post_comment(
+    request: Request, report_id: int, body: GiteeReportPostCommentBody
+):
+    """用户点击「同意」：将一条审查意见回写到对应 Gitee 合并请求。"""
+    if not _saas_enable_gitee():
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
+    uid = _session_user_id(request)
+    if not uid:
+        raise HTTPException(401, "请先登录")
+    enforce_vcs_post_comment(request)
+    engine = create_db_engine()
+    if not engine:
+        raise HTTPException(503, "无数据库")
+    with Session(engine) as session:
+        r = session.get(PrReviewReport, report_id)
+        if not r or r.user_id != uid:
+            raise HTTPException(404, "报告不存在")
+        acc = session.scalars(select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == uid)).first()
+        if not acc:
+            raise HTTPException(404, "未绑定 Gitee 账号")
+        token = acc.access_token
+        out = post_one_gitee_report_comment(
+            session,
+            report=r,
+            comment_index=body.comment_index,
+            gitee_access_token=token,
+        )
+        if not out.get("ok"):
+            raise HTTPException(502, str(out.get("error") or "post failed"))
+        return {"ok": True, "data": out}
+
+
+class GiteeReportPostCommentBody(BaseModel):
+    """将报告中指定索引的意见发到 Gitee MR。"""
+
+    comment_index: int = Field(..., ge=0)
 
 
 class GiteeOnboardingReviewBody(BaseModel):
