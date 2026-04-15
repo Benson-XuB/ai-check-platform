@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gitee 控制台 · AI PR Review</title>
+  <title>Gitee 审查控制台 · AI PR Review</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
@@ -36,22 +36,51 @@
 </head>
 <body>
   <h1>Gitee 审查控制台</h1>
-  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；报告保存在此处。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
+  <p class="sub">使用 Gitee 登录并「同步 WebHook」后，有权限的仓库在合并请求打开/更新时会自动审查；下方仅展示<strong>最近几条</strong>报告，完整列表在 <a href="/app-gitee/reports">报告归档页</a>。默认已开启 Gitee SaaS；若需关闭请设 <code>SAAS_DISABLE_GITEE=1</code> 或 <code>SAAS_ENABLE_GITEE=0</code>。</p>
   <p class="sub"><a href="/">返回首页</a> · <a href="/app">GitHub 控制台</a> · <a href="/manual">手动审查</a></p>
 
   <div id="auth" class="card"></div>
+  <div id="onboardingQuick" class="card" style="display:none;">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">补审已有的 Open 合并请求</h2>
+    <p class="meta" style="margin:0;">WebHook 只会处理<strong>之后</strong>的新事件；若接入前仓库里已有打开的 MR，可到专用页勾选后再审查（不自动跑模型）。日常新 MR 仍走 WebHook。</p>
+    <p style="margin:0.75rem 0 0;"><a class="login-link" href="/app-gitee/onboarding">打开补审页面</a></p>
+  </div>
+  <div id="llmQuick" class="card" style="display:none;">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">审查模型（可选）</h2>
+    <div id="llmQuickBody" class="meta">加载中…</div>
+    <p style="margin:0.75rem 0 0;"><a class="login-link" href="/app-gitee/llm">模型与 API Key 设置</a></p>
+  </div>
   <div id="reports" class="card" style="display:none;">
-    <h2 style="margin:0 0 0.75rem;font-size:1rem;">报告列表</h2>
+    <h2 style="margin:0 0 0.75rem;font-size:1rem;">最近报告</h2>
     <ul class="reports" id="reportList"></ul>
+    <p id="reportMore" class="meta" style="margin:0.75rem 0 0;display:none;"></p>
     <div id="detail" style="margin-top:1rem;display:none;"></div>
   </div>
 
   <script>
     const API = "";
+    const RECENT_REPORTS = 8;
 
     async function j(url, opt) {
       const r = await fetch(API + url, { credentials: "include", ...opt });
       return r.json();
+    }
+
+    async function refreshLlmQuick() {
+      const wrap = document.getElementById("llmQuick");
+      const body = document.getElementById("llmQuickBody");
+      const cr = await j("/api/saas/llm/credentials");
+      if (!cr.ok) {
+        body.textContent = "无法加载模型设置摘要。";
+        return;
+      }
+      const items = (cr.data && cr.data.items) || [];
+      const active = items.find((i) => i.is_active);
+      if (active) {
+        body.innerHTML = "当前默认审查模型：<strong>" + String(active.display_label || "").replace(/</g, "&lt;") + "</strong>";
+      } else {
+        body.textContent = "未设置自有模型与 Key，自动审查将使用站点默认密钥。";
+      }
     }
 
     async function refresh() {
@@ -63,6 +92,8 @@
           <p><a class="login-link" href="/auth/gitee/login">使用 Gitee 登录</a></p>
         `;
         document.getElementById("reports").style.display = "none";
+        document.getElementById("llmQuick").style.display = "none";
+        document.getElementById("onboardingQuick").style.display = "none";
         return;
       }
       const u = me.user;
@@ -95,11 +126,25 @@
         refresh();
       };
 
+      document.getElementById("onboardingQuick").style.display = "block";
+      document.getElementById("llmQuick").style.display = "block";
+      await refreshLlmQuick();
+
       document.getElementById("reports").style.display = "block";
-      const list = await j("/api/saas/gitee/reports?limit=50");
+      const list = await j("/api/saas/gitee/reports?limit=" + RECENT_REPORTS);
       const ul = document.getElementById("reportList");
       ul.innerHTML = "";
       const items = (list.data && list.data.items) || [];
+      const total = (list.data && typeof list.data.total === "number") ? list.data.total : items.length;
+      const moreEl = document.getElementById("reportMore");
+      if (total > RECENT_REPORTS) {
+        moreEl.style.display = "block";
+        moreEl.innerHTML = "共有 <strong>" + total + "</strong> 条记录，此处仅显示最近 " + RECENT_REPORTS +
+          " 条。<a href=\"/app-gitee/reports\">查看全部报告 →</a>";
+      } else {
+        moreEl.style.display = "none";
+        moreEl.innerHTML = "";
+      }
       if (!items.length) {
         ul.innerHTML = "<li class='meta'>暂无报告；在 Gitee 打开新的合并请求后会自动生成。</li>";
       } else {
@@ -142,4 +187,3 @@
   </script>
 </body>
 </html>
-

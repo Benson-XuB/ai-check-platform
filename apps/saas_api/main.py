@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.middleware.max_body import MaxRequestBodySizeMiddleware
-from app.routers import github_webhook, rag, review, saas_gitee, saas_github, vcs
+from app.routers import github_webhook, rag, review, saas_gitee, saas_github, saas_llm_credentials, vcs
 from app.storage.init_db import init_db
 
 
@@ -59,6 +59,7 @@ app.include_router(rag.router)
 app.include_router(review.router)
 app.include_router(saas_gitee.router)
 app.include_router(saas_github.router)
+app.include_router(saas_llm_credentials.router)
 
 STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 
@@ -81,4 +82,29 @@ def saas_app_page():
 @app.get("/app-gitee")
 def saas_gitee_app_page():
     return FileResponse(STATIC_DIR / "app-gitee.html")
+
+
+@app.get("/app-gitee/llm")
+def saas_gitee_llm_page():
+    return FileResponse(STATIC_DIR / "app-gitee-llm.html")
+
+
+@app.get("/app/llm")
+def saas_github_llm_page():
+    return FileResponse(STATIC_DIR / "app-github-llm.html")
+
+
+@app.get("/app-gitee/reports")
+def saas_gitee_reports_page():
+    return FileResponse(STATIC_DIR / "app-gitee-reports.html")
+
+
+@app.get("/app-gitee/onboarding")
+def saas_gitee_onboarding_page():
+    return FileResponse(STATIC_DIR / "app-gitee-onboarding.html")
+
+
+@app.get("/app/reports")
+def saas_github_reports_page():
+    return FileResponse(STATIC_DIR / "app-github-reports.html")
 

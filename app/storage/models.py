@@ -58,7 +58,7 @@ def _new_saas_webhook_token() -> str:
 
 
 class AppUser(Base):
-    """登录用户（当前仅 Gitee OAuth）。"""
+    """登录用户（Gitee OAuth / GitHub App 共用）。"""
 
     __tablename__ = "app_users"
 
@@ -70,6 +70,39 @@ class AppUser(Base):
     saas_webhook_token: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, default=_new_saas_webhook_token, index=True
     )
+    active_llm_credential_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey(
+            "user_llm_credentials.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_app_users_active_llm_credential_id",
+        ),
+        nullable=True,
+        index=True,
+    )
+
+
+class UserLlmCredential(Base):
+    """用户为预设模型保存的 API Key（加密）；与 AppUser.active_llm_credential_id 配合作为默认审查凭证。"""
+
+    __tablename__ = "user_llm_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("app_users.id"), nullable=False, index=True)
+    preset_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (UniqueConstraint("user_id", "preset_id", name="uq_user_llm_preset"),)
 
 
 class GiteeOAuthAccount(Base):

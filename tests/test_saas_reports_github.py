@@ -39,6 +39,9 @@ def test_saas_reports_are_available_when_gitee_disabled(monkeypatch, tmp_path):
 
     r_list = client.get("/api/saas/reports?limit=50")
     assert r_list.status_code == 200
-    items = r_list.json()["data"]["items"]
+    data = r_list.json()["data"]
+    items = data["items"]
     assert len(items) == 1
+    assert data["total"] == 1
+    assert data["offset"] == 0
 

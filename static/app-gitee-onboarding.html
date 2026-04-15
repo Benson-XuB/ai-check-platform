@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>首次接入 · 已有 Open 合并请求 · Gitee</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
+    .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    a { color: #134e4a; font-weight: 600; }
+    a.login-link {
+      display: inline-block; padding: 0.5rem 1rem; background: #c71d23; color: #fff !important;
+      text-decoration: none; border-radius: 8px;
+    }
+    .card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; background: #fff; }
+    button {
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+      background: #c71d23; color: #fff; margin-right: 0.5rem; margin-top: 0.25rem;
+    }
+    button.secondary { background: #e7e5e4; color: #1c1917; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .meta { font-size: 0.8rem; color: #78716c; }
+    .err { color: #b91c1c; font-size: 0.9rem; }
+    select, input { font: inherit; padding: 0.45rem 0.5rem; border: 1px solid #e7e5e4; border-radius: 8px; max-width: 100%; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid #f5f5f4; vertical-align: top; }
+    th { color: #57534e; font-weight: 700; }
+    .pager { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.75rem 0; }
+  </style>
+</head>
+<body>
+  <h1>首次接入：审查已有的 Open 合并请求</h1>
+  <p class="sub">仅列出 <strong>打开中</strong> 的合并请求，<strong>不会自动审查</strong>。勾选后点击「开始审查」才会调用模型（优先使用你在 <a href="/app-gitee/llm">模型与密钥</a> 中的默认配置，否则使用站点兜底）。完成后请到 <a href="/app-gitee/reports">报告列表</a> 查看。</p>
+  <p class="sub">日常新 PR 仍由 WebHook 自动触发，本页适合装 Hook 前已存在的 MR 补跑一遍。</p>
+  <p class="sub"><a href="/app-gitee">← Gitee 概览</a> · <a href="/">首页</a></p>
+
+  <div id="gate" class="card"></div>
+  <div id="main" style="display:none;">
+    <div class="card">
+      <h2 style="margin:0 0 0.5rem;font-size:1rem;">选择仓库</h2>
+      <p class="meta" style="margin:0 0 0.5rem;">从你有权限的仓库中选一库，加载该库全部 <strong>open</strong> 合并请求。</p>
+      <div class="pager">
+        <select id="repoSelect" style="flex:1;min-width:12rem;"></select>
+        <button type="button" class="secondary" id="btnRepoPrev">仓库上一页</button>
+        <button type="button" class="secondary" id="btnRepoNext">仓库下一页</button>
+      </div>
+      <p id="repoPageInfo" class="meta"></p>
+    </div>
+    <div class="card">
+      <h2 style="margin:0 0 0.5rem;font-size:1rem;">Open 合并请求</h2>
+      <p id="mrMsg" class="meta">请先选择仓库。</p>
+      <div class="pager" id="mrPager" style="display:none;">
+        <button type="button" class="secondary" id="btnMrPrev">MR 上一页</button>
+        <button type="button" class="secondary" id="btnMrNext">MR 下一页</button>
+        <span id="mrPageInfo" class="meta"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table id="mrTable" style="display:none;">
+          <thead>
+            <tr><th style="width:2rem;"><input type="checkbox" id="chkAll" title="全选本页"></th><th>#</th><th>标题</th><th>作者</th><th>更新</th></tr>
+          </thead>
+          <tbody id="mrBody"></tbody>
+        </table>
+      </div>
+      <p style="margin-top:0.75rem;">
+        <button type="button" id="btnReview">开始审查所选（最多 10 条）</button>
+        <span id="reviewMsg" class="meta"></span>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const API = "";
+    let repoPage = 1;
+    let mrPage = 1;
+    let currentPns = "";
+
+    async function j(url, opt) {
+      const r = await fetch(API + url, { credentials: "include", ...opt });
+      return r.json();
+    }
+
+    async function loadRepos() {
+      const sel = document.getElementById("repoSelect");
+      const r = await j("/api/saas/gitee/onboarding/repos?page=" + repoPage + "&per_page=30");
+      if (!r.ok) {
+        sel.innerHTML = "";
+        document.getElementById("repoPageInfo").textContent = "加载仓库失败";
+        return;
+      }
+      const d = r.data || {};
+      const items = d.items || [];
+      sel.innerHTML = items.map((it) =>
+        "<option value=\"" + String(it.path_with_namespace).replace(/"/g, "&quot;") + "\">" +
+        String(it.path_with_namespace).replace(/</g, "&lt;") + "</option>"
+      ).join("");
+      document.getElementById("repoPageInfo").textContent = "仓库第 " + (d.page || repoPage) + " 页" +
+        (d.has_more ? "（仍有更多，可翻页）" : "（已到末页）");
+      document.getElementById("btnRepoPrev").disabled = repoPage <= 1;
+      document.getElementById("btnRepoNext").disabled = !d.has_more;
+      if (items.length && !currentPns) {
+        currentPns = items[0].path_with_namespace;
+        sel.value = currentPns;
+      } else if (currentPns) {
+        sel.value = currentPns;
+      }
+      sel.onchange = () => {
+        currentPns = sel.value;
+        mrPage = 1;
+        loadMrs();
+      };
+      if (currentPns) loadMrs();
+    }
+
+    async function loadMrs() {
+      const pns = document.getElementById("repoSelect").value || currentPns;
+      currentPns = pns;
+      const msg = document.getElementById("mrMsg");
+      const table = document.getElementById("mrTable");
+      const body = document.getElementById("mrBody");
+      const pager = document.getElementById("mrPager");
+      if (!pns) {
+        msg.textContent = "没有可选仓库。";
+        table.style.display = "none";
+        pager.style.display = "none";
+        return;
+      }
+      msg.textContent = "加载中…";
+      const enc = encodeURIComponent(pns);
+      const r = await j("/api/saas/gitee/onboarding/open-merge-requests?path_with_namespace=" + enc +
+        "&page=" + mrPage + "&per_page=30");
+      body.innerHTML = "";
+      document.getElementById("chkAll").checked = false;
+      if (!r.ok) {
+        msg.textContent = "加载失败: " + (r.detail || r.error || "");
+        table.style.display = "none";
+        pager.style.display = "none";
+        return;
+      }
+      const items = (r.data && r.data.items) || [];
+      const hasMore = r.data && r.data.has_more;
+      msg.textContent = items.length ? ("共本页 " + items.length + " 条 open 合并请求（仅展示，不自动审查）") : "该仓库当前没有 open 合并请求。";
+      document.getElementById("mrPageInfo").textContent = "MR 第 " + mrPage + " 页" + (hasMore ? "（仍有）" : "");
+      document.getElementById("btnMrPrev").disabled = mrPage <= 1;
+      document.getElementById("btnMrNext").disabled = !hasMore;
+      pager.style.display = "inline-flex";
+      if (!items.length) {
+        table.style.display = "none";
+        return;
+      }
+      table.style.display = "table";
+      items.forEach((it) => {
+        const tr = document.createElement("tr");
+        const url = it.html_url || "";
+        const title = String(it.title || "").replace(/</g, "&lt;");
+        const author = String(it.author || "").replace(/</g, "&lt;");
+        const upd = String(it.updated_at || "").replace(/</g, "&lt;");
+        tr.innerHTML = "<td><input type=\"checkbox\" class=\"mr-chk\" data-url=\"" + url.replace(/"/g, "&quot;") + "\"></td>" +
+          "<td>" + it.number + "</td><td><a href=\"" + url.replace(/"/g, "&quot;") + "\" target=\"_blank\" rel=\"noopener\">" + title + "</a></td>" +
+          "<td>" + author + "</td><td class=\"meta\">" + upd + "</td>";
+        body.appendChild(tr);
+      });
+    }
+
+    document.getElementById("chkAll").onchange = (e) => {
+      document.querySelectorAll(".mr-chk").forEach((c) => { c.checked = e.target.checked; });
+    };
+
+    document.getElementById("btnRepoPrev").onclick = () => {
+      if (repoPage > 1) { repoPage--; loadRepos(); }
+    };
+    document.getElementById("btnRepoNext").onclick = () => {
+      repoPage++;
+      loadRepos();
+    };
+    document.getElementById("btnMrPrev").onclick = () => {
+      if (mrPage > 1) { mrPage--; loadMrs(); }
+    };
+    document.getElementById("btnMrNext").onclick = () => {
+      mrPage++;
+      loadMrs();
+    };
+
+    document.getElementById("btnReview").onclick = async () => {
+      const urls = [];
+      document.querySelectorAll(".mr-chk:checked").forEach((c) => {
+        const u = c.getAttribute("data-url");
+        if (u) urls.push(u);
+      });
+      const el = document.getElementById("reviewMsg");
+      if (!urls.length) {
+        el.textContent = "请至少勾选一条。";
+        el.className = "err";
+        return;
+      }
+      if (urls.length > 10) {
+        el.textContent = "一次最多 10 条。";
+        el.className = "err";
+        return;
+      }
+      el.className = "meta";
+      el.textContent = "提交中…";
+      const r = await j("/api/saas/gitee/onboarding/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pr_urls: urls }),
+      });
+      if (!r.ok) {
+        el.textContent = "失败: " + (r.detail || r.error || "");
+        el.className = "err";
+        return;
+      }
+      el.textContent = (r.data && r.data.message) ? r.data.message : "已排队";
+ };
+
+    async function init() {
+      const gate = document.getElementById("gate");
+      const me = await j("/api/saas/gitee/me");
+      if (!me.authenticated) {
+        gate.innerHTML = "<p>请先 <a class='login-link' href='/auth/gitee/login'>使用 Gitee 登录</a>。</p>";
+        return;
+      }
+      gate.style.display = "none";
+      document.getElementById("main").style.display = "block";
+      await loadRepos();
+    }
+
+    init();
+  </script>
+</body>
+</html>

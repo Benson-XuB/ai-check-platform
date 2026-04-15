@@ -15,7 +15,7 @@ import httpx
 from app.routers.gitee import FetchPRRequest, run_fetch_pr
 from app.routers.review import ReviewRequest, run_review_core
 from app.services import gitee_webhook as wh_svc
-from app.services.llm_defaults import get_public_default_llm_provider
+from app.services.llm_user_resolve import resolve_llm_for_review
 from app.storage.db import create_db_engine
 from app.storage.models import AppUser, GiteeOAuthAccount, GiteeWatchedRepo, PrReviewReport
 
@@ -230,17 +230,6 @@ def create_repo_hook(
         return None
 
 
-def platform_llm_key() -> tuple[str, str]:
-    """返回 (provider, api_key)。"""
-    provider = get_public_default_llm_provider()
-    if provider == "kimi":
-        key = (os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or "").strip()
-    else:
-        provider = "dashscope"
-        key = os.getenv("DASHSCOPE_API_KEY", "").strip()
-    return provider, key
-
-
 def path_with_namespace_from_payload(payload: dict[str, Any]) -> Optional[str]:
     repo = payload.get("repository") or {}
     p = repo.get("path_with_namespace") or repo.get("full_name")
@@ -248,6 +237,159 @@ def path_with_namespace_from_payload(payload: dict[str, Any]) -> Optional[str]:
         return None
     s = str(p).strip()
     return s or None
+
+
+def parse_gitee_pull_url(pr_url: str) -> tuple[str, int]:
+    """解析 https://gitee.com/{path_with_namespace}/pulls/{number}。"""
+    s = (pr_url or "").strip().rstrip("/")
+    marker = "/pulls/"
+    if marker not in s:
+        raise ValueError("不是有效的 Gitee 合并请求链接（需含 /pulls/）")
+    head, tail = s.split(marker, 1)
+    num_part = tail.split("/")[0].strip()
+    try:
+        pr_number = int(num_part)
+    except ValueError as e:
+        raise ValueError("合并请求编号无效") from e
+    if "gitee.com/" not in head.lower():
+        raise ValueError("仅支持 gitee.com 链接")
+    path_ns = head.split("gitee.com/", 1)[1].strip("/")
+    if not path_ns or pr_number < 1:
+        raise ValueError("无效链接")
+    return path_ns, pr_number
+
+
+def list_repo_open_pulls(
+    access_token: str,
+    path_with_namespace: str,
+    *,
+    page: int = 1,
+    per_page: int = 50,
+) -> list[dict[str, Any]]:
+    """列出指定仓库 state=open 的合并请求（Gitee API v5）。"""
+    owner, repo = split_path_with_namespace(path_with_namespace)
+    eo, er = quote(owner, safe=""), quote(repo, safe="")
+    per_page = max(1, min(int(per_page), 100))
+    page = max(1, int(page))
+    with _gitee_http_client() as client:
+        r = _request_with_retry(
+            lambda: client.get(
+                f"{GITEE_API}/repos/{eo}/{er}/pulls",
+                params={
+                    "access_token": access_token,
+                    "state": "open",
+                    "page": page,
+                    "per_page": per_page,
+                    "sort": "updated",
+                },
+            ),
+            op="列出 Gitee 打开的合并请求",
+        )
+    if r.status_code != 200:
+        logger.warning(
+            "list open pulls failed %s: %s %s",
+            path_with_namespace,
+            r.status_code,
+            r.text[:200],
+        )
+        return []
+    data = r.json()
+    return data if isinstance(data, list) else []
+
+
+def run_saas_gitee_pr_review(
+    app_user_id: int,
+    gitee_access_token: str,
+    *,
+    pr_url: str,
+    path_with_namespace: str,
+    pr_number: int,
+    pr_title: Optional[str] = None,
+) -> None:
+    """
+    使用用户 OAuth token 拉取合并请求，按用户默认模型或平台兜底模型审查，写入 pr_review_reports；不向 Gitee 发帖。
+    WebHook 与「首次接入手动审查」共用。
+    """
+    resolved = resolve_llm_for_review(app_user_id)
+    provider, llm_key, api_model = resolved.provider, resolved.api_key, resolved.api_model
+    if not llm_key:
+        logger.error("SaaS 审查需要 LLM API Key（用户默认凭证与平台环境变量均无）")
+        _save_report_failed(
+            app_user_id,
+            path_with_namespace,
+            pr_number,
+            None,
+            pr_title,
+            "未配置 LLM API Key（用户默认凭证与平台环境变量均无）",
+        )
+        return
+
+    fetch_req = FetchPRRequest(
+        pr_url=pr_url,
+        vcs_token=gitee_access_token,
+        enrich_context=_env_bool("SAAS_WEBHOOK_ENRICH_CONTEXT", default=False),
+        use_symbol_graph=_env_bool("SAAS_WEBHOOK_USE_SYMBOL_GRAPH", default=False),
+        use_treesitter=_env_bool("SAAS_WEBHOOK_USE_TREESITTER", default=False),
+        use_pyright=_env_bool("SAAS_WEBHOOK_USE_PYRIGHT", default=False),
+    )
+    out = run_fetch_pr(fetch_req)
+    if not out.get("ok"):
+        logger.error("SaaS fetch PR 失败: %s", out.get("error"))
+        _save_report_failed(
+            app_user_id,
+            path_with_namespace,
+            pr_number,
+            None,
+            pr_title,
+            str(out.get("error") or "fetch failed"),
+        )
+        return
+    data = out["data"]
+    head_sha = (data.get("head_sha") or "")[:80] or None
+    title_use = pr_title if pr_title else None
+    if not title_use and isinstance(data.get("title"), str):
+        title_use = (data.get("title") or "")[:1024]
+
+    use_default = (
+        provider == "dashscope"
+        and _env_bool("SAAS_WEBHOOK_USE_DEFAULT_REVIEW", default=True)
+        and api_model is None
+    )
+    try:
+        default_passes = int(os.getenv("SAAS_WEBHOOK_DEFAULT_PASSES", "8"))
+    except ValueError:
+        default_passes = 8
+
+    review_req = ReviewRequest(
+        diff=data.get("diff") or "",
+        pr_title=data.get("title") or "",
+        pr_body=data.get("body") or "",
+        file_contexts=data.get("file_contexts") or {},
+        llm_provider=provider,
+        llm_api_key=llm_key,
+        llm_model=api_model,
+        use_mock=False,
+        use_default_review=use_default,
+        default_passes=default_passes,
+        use_semantic_context=_env_bool("SAAS_WEBHOOK_USE_SEMANTIC_CONTEXT", default=False),
+        repo_key=f'{data.get("owner")}/{data.get("repo")}' if data.get("owner") and data.get("repo") else None,
+        ref=data.get("head_sha") or None,
+    )
+    review_out = run_review_core(review_req)
+    if not review_out.get("ok"):
+        _save_report_failed(
+            app_user_id,
+            path_with_namespace,
+            pr_number,
+            head_sha,
+            title_use,
+            str(review_out.get("error") or "review failed"),
+        )
+        return
+
+    payload_json = json.dumps(review_out.get("data") or {}, ensure_ascii=False)
+    _save_report_ok(app_user_id, path_with_namespace, pr_number, head_sha, title_use, payload_json)
+    logger.info("SaaS 审查已写入报告 user=%s repo=%s pr=%s", app_user_id, path_with_namespace, pr_number)
 
 
 def process_saas_merge_request_webhook(
@@ -277,63 +419,35 @@ def process_saas_merge_request_webhook(
         pr_number_int = 0
     pr_title = (pr.get("title") or "")[:1024] if isinstance(pr.get("title"), str) else None
 
-    provider, llm_key = platform_llm_key()
-    if not llm_key:
-        logger.error("SaaS 审查需要平台配置 DASHSCOPE_API_KEY 或 KIMI_API_KEY")
-        _save_report_failed(app_user_id, path_ns, pr_number_int, None, pr_title, "平台未配置 LLM API Key")
-        return
-
-    fetch_req = FetchPRRequest(
+    run_saas_gitee_pr_review(
+        app_user_id,
+        gitee_access_token,
         pr_url=pr_url,
-        vcs_token=gitee_access_token,
-        enrich_context=_env_bool("SAAS_WEBHOOK_ENRICH_CONTEXT", default=False),
-        use_symbol_graph=_env_bool("SAAS_WEBHOOK_USE_SYMBOL_GRAPH", default=False),
-        use_treesitter=_env_bool("SAAS_WEBHOOK_USE_TREESITTER", default=False),
-        use_pyright=_env_bool("SAAS_WEBHOOK_USE_PYRIGHT", default=False),
+        path_with_namespace=path_ns,
+        pr_number=pr_number_int,
+        pr_title=pr_title,
     )
-    out = run_fetch_pr(fetch_req)
-    if not out.get("ok"):
-        logger.error("SaaS fetch PR 失败: %s", out.get("error"))
-        _save_report_failed(app_user_id, path_ns, pr_number_int, None, pr_title, str(out.get("error") or "fetch failed"))
-        return
-    data = out["data"]
-    head_sha = (data.get("head_sha") or "")[:80] or None
 
-    use_default = provider == "dashscope" and _env_bool("SAAS_WEBHOOK_USE_DEFAULT_REVIEW", default=True)
+
+def run_saas_gitee_onboarding_review_for_url(
+    app_user_id: int,
+    gitee_access_token: str,
+    pr_url: str,
+) -> None:
+    """首次接入手动审查：仅用户点击后调用；解析链接后走与 WebHook 相同的审查逻辑。"""
     try:
-        default_passes = int(os.getenv("SAAS_WEBHOOK_DEFAULT_PASSES", "8"))
+        path_ns, num = parse_gitee_pull_url(pr_url)
     except ValueError:
-        default_passes = 8
-
-    review_req = ReviewRequest(
-        diff=data.get("diff") or "",
-        pr_title=data.get("title") or "",
-        pr_body=data.get("body") or "",
-        file_contexts=data.get("file_contexts") or {},
-        llm_provider=provider,
-        llm_api_key=llm_key,
-        use_mock=False,
-        use_default_review=use_default,
-        default_passes=default_passes,
-        use_semantic_context=_env_bool("SAAS_WEBHOOK_USE_SEMANTIC_CONTEXT", default=False),
-        repo_key=f'{data.get("owner")}/{data.get("repo")}' if data.get("owner") and data.get("repo") else None,
-        ref=data.get("head_sha") or None,
-    )
-    review_out = run_review_core(review_req)
-    if not review_out.get("ok"):
-        _save_report_failed(
-            app_user_id,
-            path_ns,
-            pr_number_int,
-            head_sha,
-            pr_title,
-            str(review_out.get("error") or "review failed"),
-        )
+        logger.warning("onboarding review skipped, invalid url: %s", pr_url[:120])
         return
-
-    payload_json = json.dumps(review_out.get("data") or {}, ensure_ascii=False)
-    _save_report_ok(app_user_id, path_ns, pr_number_int, head_sha, pr_title, payload_json)
-    logger.info("SaaS 审查已写入报告 user=%s repo=%s pr=%s", app_user_id, path_ns, pr_number_int)
+    run_saas_gitee_pr_review(
+        app_user_id,
+        gitee_access_token,
+        pr_url=pr_url.strip(),
+        path_with_namespace=path_ns,
+        pr_number=num,
+        pr_title=None,
+    )
 
 
 def _save_report_ok(

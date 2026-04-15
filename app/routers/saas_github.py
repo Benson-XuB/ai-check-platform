@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.services.oauth_state import make_signed_oauth_state, verify_signed_oauth_state
@@ -154,6 +154,14 @@ def saas_reports_github(request: Request, limit: int = 50, offset: int = 0):
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     with Session(engine) as session:
+        total = (
+            session.scalar(
+                select(func.count())
+                .select_from(PrReviewReport)
+                .where(PrReviewReport.user_id == uid)
+            )
+            or 0
+        )
         stmt = (
             select(PrReviewReport)
             .where(PrReviewReport.user_id == uid)
@@ -165,6 +173,9 @@ def saas_reports_github(request: Request, limit: int = 50, offset: int = 0):
         return {
             "ok": True,
             "data": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
                 "items": [
                     {
                         "id": r.id,

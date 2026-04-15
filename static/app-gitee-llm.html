@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模型与密钥 · Gitee · AI PR Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
+    .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    a { color: #134e4a; font-weight: 600; }
+    a.login-link {
+      display: inline-block; padding: 0.5rem 1rem; background: #c71d23; color: #fff !important;
+      text-decoration: none; border-radius: 8px;
+    }
+    .card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; background: #fff; }
+    button {
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+      background: #c71d23; color: #fff; margin-right: 0.5rem; margin-top: 0.25rem;
+    }
+    button.secondary { background: #e7e5e4; color: #1c1917; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .meta { font-size: 0.8rem; color: #78716c; }
+    .err { color: #b91c1c; font-size: 0.9rem; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    input.llm-in, select.llm-in { width: 100%; max-width: 28rem; padding: 0.45rem 0.5rem; border: 1px solid #e7e5e4; border-radius: 8px; font: inherit; box-sizing: border-box; }
+    .llm-row { margin: 0.5rem 0; }
+    table.llm-t { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    table.llm-t th, table.llm-t td { text-align: left; padding: 0.4rem 0.35rem; border-bottom: 1px solid #f5f5f4; }
+  </style>
+</head>
+<body>
+  <h1>审查用模型与 API Key</h1>
+  <p class="sub">从预设中选择模型并保存 Key；可测试连通性。设为默认后，Gitee WebHook 自动审查优先使用；失败或未配置时回退站点环境变量。说明见 <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener">LiteLLM Providers</a>（Kimi 为 Moonshot 官方接口）。</p>
+  <p class="sub"><a href="/app-gitee">←返回 Gitee 概览</a> · <a href="/">首页</a> · <a href="/app">GitHub 控制台</a></p>
+
+  <div id="gate" class="card"></div>
+  <div id="llmBody" class="card meta" style="display:none;">加载中…</div>
+
+  <script>
+    const API = "";
+
+    async function j(url, opt) {
+      const r = await fetch(API + url, { credentials: "include", ...opt });
+      return r.json();
+    }
+
+    async function renderLlmPanel() {
+      const box = document.getElementById("llmBody");
+      box.style.display = "block";
+      try {
+        const pr = await j("/api/saas/llm/presets");
+        const cr = await j("/api/saas/llm/credentials");
+        if (!pr.ok) {
+          box.innerHTML = "<span class='err'>无法加载预设: " + (pr.detail || pr.error || "") + "</span>";
+          return;
+        }
+        if (!cr.ok) {
+          box.innerHTML = "<span class='err'>无法加载凭证: " + (cr.detail || cr.error || "") + "</span>";
+          return;
+        }
+        const presets = pr.data || [];
+        const items = (cr.data && cr.data.items) || [];
+        const esc = (s) => String(s == null ? "" : s)
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        const byGroup = {};
+        presets.forEach((p) => {
+          const g = p.group || "其它";
+          (byGroup[g] = byGroup[g] || []).push(p);
+        });
+        const gkeys = Object.keys(byGroup).sort((a, b) => a.localeCompare(b, "zh-CN"));
+        let opts = "";
+        gkeys.forEach((g) => {
+          opts += "<optgroup label=\"" + esc(g) + "\">";
+          byGroup[g].forEach((p) => {
+            opts += "<option value=\"" + esc(p.id) + "\">" + esc(p.label) + "</option>";
+          });
+          opts += "</optgroup>";
+        });
+        let rows = items.map((it) => {
+          const act = it.is_active ? " <span class='badge badge-ok'>默认</span>" : "";
+          const btns = "<button type='button' class='secondary' data-act='use' data-id=\"" + it.id + "\">设为默认</button> " +
+            "<button type='button' class='secondary' data-act='test' data-id=\"" + it.id + "\">测试</button> " +
+            "<button type='button' class='secondary' data-act='del' data-id=\"" + it.id + "\">删除</button>";
+          return "<tr><td>" + String(it.display_label || "").replace(/</g, "&lt;") + act + "</td><td>" +
+            (it.label ? it.label.replace(/</g, "&lt;") : "—") + "</td><td>" + btns + "</td></tr>";
+        }).join("");
+        box.className = "card";
+        box.innerHTML =
+          "<div class='llm-row'><label>预设模型<br><select id='llmPreset' class='llm-in'>" + opts + "</select></label></div>" +
+          "<div class='llm-row'><label>备注（可选）<br><input id='llmLabel' class='llm-in' type='text' placeholder='例如：公司账号'></label></div>" +
+          "<div class='llm-row'><label>API Key<br><input id='llmKey' class='llm-in' type='password' autocomplete='off' placeholder='保存后仅显示为已配置'></label></div>" +
+          "<div class='llm-row'><button type='button' id='llmTestNew'>测试（未保存）</button> <button type='button' id='llmSave'>保存</button> <span id='llmMsg' class='meta'></span></div>" +
+          "<h3 style='margin:1rem 0 0.35rem;font-size:0.95rem;'>已保存</h3>" +
+          "<table class='llm-t'><thead><tr><th>模型</th><th>备注</th><th>操作</th></tr></thead><tbody>" +
+          (rows || "<tr><td colspan='3' class='meta'>暂无，请先保存一条</td></tr>") + "</tbody></table>";
+        const msg = (t, err) => {
+          const el = document.getElementById("llmMsg");
+          el.textContent = t || "";
+          el.className = err ? "err" : "meta";
+        };
+        document.getElementById("llmTestNew").onclick = async () => {
+          const preset_id = document.getElementById("llmPreset").value;
+          const api_key = document.getElementById("llmKey").value;
+          msg("测试中…");
+          const r = await j("/api/saas/llm/credentials/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ preset_id, api_key }),
+          });
+          msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+        };
+        document.getElementById("llmSave").onclick = async () => {
+          const preset_id = document.getElementById("llmPreset").value;
+          const api_key = document.getElementById("llmKey").value;
+          const label = document.getElementById("llmLabel").value;
+          if (!api_key.trim()) {
+            msg("请填写 API Key", true);
+            return;
+          }
+          msg("保存中…");
+          const r = await j("/api/saas/llm/credentials", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ preset_id, api_key, label }),
+          });
+          if (!r.ok) {
+            msg("保存失败: " + (r.detail || r.error || ""), true);
+            return;
+          }
+          document.getElementById("llmKey").value = "";
+          msg("已保存");
+          await renderLlmPanel();
+        };
+        box.querySelectorAll("button[data-act]").forEach((btn) => {
+          btn.onclick = async () => {
+            const id = parseInt(btn.getAttribute("data-id"), 10);
+            const act = btn.getAttribute("data-act");
+            if (act === "del") {
+              if (!confirm("删除该条凭证？")) return;
+              await j("/api/saas/llm/credentials/" + id, { method: "DELETE" });
+              await renderLlmPanel();
+              return;
+            }
+            if (act === "use") {
+              await j("/api/saas/llm/credentials/" + id + "/activate", { method: "POST" });
+              await renderLlmPanel();
+              return;
+            }
+            if (act === "test") {
+              msg("测试中…");
+              const r = await j("/api/saas/llm/credentials/test", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ credential_id: id }),
+              });
+              msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+            }
+          };
+        });
+      } catch (e) {
+        box.innerHTML = "<span class='err'>加载失败</span>";
+      }
+    }
+
+    async function init() {
+      const gate = document.getElementById("gate");
+      const me = await j("/api/saas/gitee/me");
+      if (!me.authenticated) {
+        gate.innerHTML = "<p>请先 <a class='login-link' href='/auth/gitee/login'>使用 Gitee 登录</a> 后再配置模型与密钥。</p>";
+        return;
+      }
+      gate.innerHTML = "<p class='meta'>已登录 Gitee。配置将保存在当前账号下。</p>";
+      await renderLlmPanel();
+    }
+
+    init();
+  </script>
+</body>
+</html>

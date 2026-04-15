@@ -7,15 +7,19 @@ import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.services.gitee_saas import (
     exchange_code_for_token,
     fetch_gitee_user,
+    list_repo_open_pulls,
+    list_user_repos,
     oauth_config_ok,
+    run_saas_gitee_onboarding_review_for_url,
     sync_hooks_for_user,
     upsert_user_from_gitee_token,
 )
@@ -219,6 +223,14 @@ def saas_reports(request: Request, limit: int = 50, offset: int = 0):
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     with Session(engine) as session:
+        total = (
+            session.scalar(
+                select(func.count())
+                .select_from(PrReviewReport)
+                .where(PrReviewReport.user_id == uid)
+            )
+            or 0
+        )
         stmt = (
             select(PrReviewReport)
             .where(PrReviewReport.user_id == uid)
@@ -230,6 +242,9 @@ def saas_reports(request: Request, limit: int = 50, offset: int = 0):
         return {
             "ok": True,
             "data": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
                 "items": [
                     {
                         "id": r.id,
@@ -280,3 +295,158 @@ def saas_report_detail(request: Request, report_id: int):
                 "result": parsed,
             },
         }
+
+
+class GiteeOnboardingReviewBody(BaseModel):
+    """用户勾选的 Gitee 合并请求链接；仅手动触发审查，与 WebHook 无关。"""
+
+    pr_urls: list[str] = Field(..., min_length=1, max_length=10)
+
+
+@router.get("/api/saas/gitee/onboarding/repos")
+def gitee_onboarding_repos(request: Request, page: int = 1, per_page: int = 50):
+    """当前用户 Gitee 账号下有权限的仓库（分页），用于选择仓库后列出 open 合并请求。"""
+    if not _saas_enable_gitee():
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
+    uid = _session_user_id(request)
+    if not uid:
+        raise HTTPException(401, "请先登录")
+    engine = create_db_engine()
+    if not engine:
+        raise HTTPException(503, "无数据库")
+    with Session(engine) as session:
+        acc = session.scalars(select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == uid)).first()
+        if not acc:
+            raise HTTPException(404, "未绑定 Gitee 账号")
+        token = acc.access_token
+    per_page = max(1, min(per_page, 100))
+    page = max(1, page)
+    raw = list_user_repos(token, page=page, per_page=per_page)
+    items = []
+    for r in raw:
+        pns = r.get("path_with_namespace") or r.get("full_name")
+        if not pns:
+            continue
+        items.append(
+            {
+                "path_with_namespace": str(pns).strip(),
+                "name": str(r.get("name") or ""),
+                "description": str(r.get("description") or "")[:240],
+            }
+        )
+    return {
+        "ok": True,
+        "data": {
+            "items": items,
+            "page": page,
+            "per_page": per_page,
+            "has_more": len(raw) >= per_page,
+        },
+    }
+
+
+@router.get("/api/saas/gitee/onboarding/open-merge-requests")
+def gitee_onboarding_open_merge_requests(
+    request: Request,
+    path_with_namespace: str,
+    page: int = 1,
+    per_page: int = 50,
+):
+    """指定仓库下 state=open 的合并请求（仅列表，不审查）。"""
+    if not _saas_enable_gitee():
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
+    uid = _session_user_id(request)
+    if not uid:
+        raise HTTPException(401, "请先登录")
+    pns = (path_with_namespace or "").strip()
+    if not pns or "/" not in pns:
+        raise HTTPException(400, "无效的 path_with_namespace")
+    engine = create_db_engine()
+    if not engine:
+        raise HTTPException(503, "无数据库")
+    with Session(engine) as session:
+        acc = session.scalars(select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == uid)).first()
+        if not acc:
+            raise HTTPException(404, "未绑定 Gitee 账号")
+        token = acc.access_token
+    per_page = max(1, min(per_page, 100))
+    page = max(1, page)
+    pulls = list_repo_open_pulls(token, pns, page=page, per_page=per_page)
+    items = []
+    for pr in pulls:
+        if not isinstance(pr, dict):
+            continue
+        if (pr.get("state") or "").strip().lower() != "open":
+            continue
+        num = pr.get("number")
+        try:
+            num_int = int(num) if num is not None else 0
+        except (TypeError, ValueError):
+            num_int = 0
+        html_url = pr.get("html_url") or ""
+        if not html_url and num_int:
+            html_url = f"https://gitee.com/{pns}/pulls/{num_int}"
+        user = pr.get("user") if isinstance(pr.get("user"), dict) else {}
+        items.append(
+            {
+                "number": num_int,
+                "title": (pr.get("title") or "")[:1024] if isinstance(pr.get("title"), str) else "",
+                "html_url": str(html_url).strip(),
+                "state": pr.get("state") or "open",
+                "updated_at": pr.get("updated_at"),
+                "author": (user.get("login") or "") if isinstance(user, dict) else "",
+            }
+        )
+    return {
+        "ok": True,
+        "data": {
+            "path_with_namespace": pns,
+            "items": items,
+            "page": page,
+            "per_page": per_page,
+            "has_more": len(pulls) >= per_page,
+        },
+    }
+
+
+@router.post("/api/saas/gitee/onboarding/review")
+def gitee_onboarding_review(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    body: GiteeOnboardingReviewBody,
+):
+    """
+    用户主动对选中的 open 合并请求排队审查；使用用户默认 LLM 凭证或平台兜底。
+    后台执行，与 WebHook 共用同一套审查与落库逻辑。
+    """
+    if not _saas_enable_gitee():
+        raise HTTPException(403, "Gitee SaaS disabled on this server")
+    uid = _session_user_id(request)
+    if not uid:
+        raise HTTPException(401, "请先登录")
+    engine = create_db_engine()
+    if not engine:
+        raise HTTPException(503, "无数据库")
+    with Session(engine) as session:
+        acc = session.scalars(select(GiteeOAuthAccount).where(GiteeOAuthAccount.user_id == uid)).first()
+        if not acc:
+            raise HTTPException(404, "未绑定 Gitee 账号")
+        token = acc.access_token
+    seen: set[str] = set()
+    for raw_u in body.pr_urls:
+        u = (raw_u or "").strip()
+        if not u or u in seen:
+            continue
+        if not u.startswith("https://gitee.com/"):
+            raise HTTPException(400, "仅支持 https://gitee.com/ 下的合并请求链接")
+        seen.add(u)
+        background_tasks.add_task(run_saas_gitee_onboarding_review_for_url, uid, token, u)
+    if not seen:
+        raise HTTPException(400, "没有有效的链接")
+    return {
+        "ok": True,
+        "data": {
+            "queued": len(seen),
+            "message": "已排队审查，请稍后到「报告」列表查看结果",
+        },
+    }

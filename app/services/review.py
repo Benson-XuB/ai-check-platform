@@ -6,8 +6,6 @@ import re
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 REVIEW_CATEGORIES = "logic|design|readability|edge_case|semantic|security"
 
 FALLBACK_COMMENTS = [
@@ -516,24 +514,18 @@ def _call_dashscope(
     max_tokens: Optional[int] = None,
     temperature: float = 0.3,
 ) -> str:
-    """调用 DashScope 聊天接口，返回 content 文本。"""
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    with httpx.Client(timeout=120) as client:
-        r = client.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-        )
-    if r.status_code != 200:
-        raise RuntimeError(f"DashScope API 错误: {r.status_code} {r.text[:300]}")
-    out = r.json()
-    return out.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    """调用 DashScope（经 LiteLLM），返回 content 文本。"""
+    from app.services.llm_litellm import completion_text
+
+    return completion_text(
+        "dashscope",
+        api_key,
+        model,
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=120.0,
+    )
 
 
 def call_dashscope(
@@ -1005,21 +997,35 @@ def call_kimi(
     pr_title: str = "",
     pr_body: str = "",
     file_contexts: Optional[Dict[str, str]] = None,
+    *,
+    model: str = "moonshot-v1-32k",
 ) -> List[Dict[str, Any]]:
-    """调用 Kimi 进行审查。"""
+    """调用 Kimi / Moonshot（经 LiteLLM）进行审查。"""
+    from app.services.llm_litellm import completion_text
+
     prompt = _build_prompt(diff, pr_title, pr_body, file_contexts or {})
-    with httpx.Client(timeout=120) as client:
-        r = client.post(
-            "https://api.moonshot.cn/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "moonshot-v1-32k",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-            },
-        )
-    if r.status_code != 200:
-        raise RuntimeError(f"Kimi API 错误: {r.status_code} {r.text[:300]}")
-    out = r.json()
-    content = out.get("choices", [{}])[0].get("message", {}).get("content", "")
+    content = completion_text("kimi", api_key, model, prompt, temperature=0.3, timeout=120.0)
+    return _parse_review_output(content, diff)
+
+
+def call_litellm(
+    diff: str,
+    api_key: str,
+    litellm_model: str,
+    pr_title: str = "",
+    pr_body: str = "",
+    file_contexts: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """任意 LiteLLM 支持的 model 字符串（如 openai/gpt-4o、anthropic/claude-3-5-sonnet-20241022）。"""
+    from app.services.llm_litellm import completion_text
+
+    prompt = _build_prompt(diff, pr_title, pr_body, file_contexts or {})
+    content = completion_text(
+        "litellm",
+        api_key,
+        litellm_model,
+        prompt,
+        temperature=0.3,
+        timeout=120.0,
+    )
     return _parse_review_output(content, diff)

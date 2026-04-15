@@ -54,22 +54,45 @@
 </head>
 <body>
   <h1>GitHub 审查控制台</h1>
-  <p class="sub">本页仅服务 <strong>GitHub App</strong>：安装/连接后，PR 打开/更新会自动审查并在 PR 上显示 Check；报告保存在此处，点击 <strong>Agree</strong> 后才会回写评论到 PR。LLM 使用服务端配置的 Key。</p>
+  <p class="sub">本页仅服务 <strong>GitHub App</strong>：安装/连接后，PR 打开/更新会自动审查并在 PR 上显示 Check；下方仅展示<strong>最近几条</strong>报告，完整列表与回写请在 <a href="/app/reports">报告归档页</a>。模型与 API Key 在 <a href="/app/llm">单独页面</a> 配置（未配置时回退服务端环境变量）。</p>
   <p class="sub"><a href="/">返回首页</a> · <a href="/app-gitee">Gitee 控制台</a>（合并请求 / OAuth） · <a href="/manual">手动审查</a></p>
 
   <div id="auth" class="card"></div>
+  <div id="llmQuick" class="card" style="display:none;">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">审查模型（可选）</h2>
+    <div id="llmQuickBody" class="meta">加载中…</div>
+    <p style="margin:0.75rem 0 0;"><a class="login-link" href="/app/llm">模型与 API Key 设置</a></p>
+  </div>
   <div id="reports" class="card" style="display:none;">
-    <h2 style="margin:0 0 0.75rem;font-size:1rem;">报告列表</h2>
+    <h2 style="margin:0 0 0.75rem;font-size:1rem;">最近报告</h2>
     <ul class="reports" id="reportList"></ul>
+    <p id="reportMore" class="meta" style="margin:0.75rem 0 0;display:none;"></p>
     <div id="detail" style="margin-top:1rem;display:none;"></div>
   </div>
 
   <script>
     const API = "";
+    const RECENT_REPORTS = 8;
 
     async function j(url, opt) {
       const r = await fetch(API + url, { credentials: "include", ...opt });
       return r.json();
+    }
+
+    async function refreshLlmQuick() {
+      const body = document.getElementById("llmQuickBody");
+      const cr = await j("/api/saas/llm/credentials");
+      if (!cr.ok) {
+        body.textContent = "无法加载模型设置摘要。";
+        return;
+      }
+      const items = (cr.data && cr.data.items) || [];
+      const active = items.find((i) => i.is_active);
+      if (active) {
+        body.innerHTML = "当前默认审查模型：<strong>" + String(active.display_label || "").replace(/</g, "&lt;") + "</strong>";
+      } else {
+        body.textContent = "未设置自有模型与 Key，自动审查将使用站点默认密钥。";
+      }
     }
 
     async function refresh() {
@@ -83,12 +106,13 @@
           <p class="meta" style="margin-top:0.75rem;">要用 <strong>Gitee</strong>？请打开 <a href="/app-gitee">Gitee 控制台</a>（与 GitHub 分开展示，避免混用）。</p>
         `;
         document.getElementById("reports").style.display = "none";
+        document.getElementById("llmQuick").style.display = "none";
         return;
       }
       const u = me.user;
       authEl.innerHTML = `
         <p><strong>GitHub 已连接</strong>（用户 id: ${u.id}，installation: ${u.github_installation_id}）</p>
-        <p class="meta">当你在已安装的仓库打开/更新 PR，会自动生成报告，并在 PR 上显示 Check。点 Agree 后会回写评论到 PR。</p>
+        <p class="meta">当你在已安装的仓库打开/更新 PR，会自动生成报告，并在 PR 上显示 Check。在 <a href="/app/reports">报告归档页</a> 可分页查看全部并 Agree 回写。</p>
         <button type="button" class="secondary" id="btnOut">退出登录</button>
       `;
       document.getElementById("btnOut").onclick = async () => {
@@ -96,11 +120,24 @@
         refresh();
       };
 
+      document.getElementById("llmQuick").style.display = "block";
+      await refreshLlmQuick();
+
       document.getElementById("reports").style.display = "block";
-      const list = await j("/api/saas/reports?limit=50");
+      const list = await j("/api/saas/reports?limit=" + RECENT_REPORTS);
       const ul = document.getElementById("reportList");
       ul.innerHTML = "";
       const items = (list.data && list.data.items) || [];
+      const total = (list.data && typeof list.data.total === "number") ? list.data.total : items.length;
+      const moreEl = document.getElementById("reportMore");
+      if (total > RECENT_REPORTS) {
+        moreEl.style.display = "block";
+        moreEl.innerHTML = "共有 <strong>" + total + "</strong> 条记录，此处仅显示最近 " + RECENT_REPORTS +
+          " 条。<a href=\"/app/reports\">查看全部报告 →</a>";
+      } else {
+        moreEl.style.display = "none";
+        moreEl.innerHTML = "";
+      }
       if (!items.length) {
         ul.innerHTML = "<li class='meta'>暂无报告；在 GitHub 已安装仓库打开/更新 PR 后会自动生成。</li>";
       } else {

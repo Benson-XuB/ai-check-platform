@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审查报告 · GitHub · AI PR Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
+    .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    a { color: #134e4a; font-weight: 600; }
+    a.login-link {
+      display: inline-block; padding: 0.5rem 1rem; background: #134e4a; color: #fff !important;
+      text-decoration: none; border-radius: 8px;
+    }
+    .card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; background: #fff; }
+    button {
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+      background: #134e4a; color: #fff; margin-right: 0.5rem; margin-top: 0.25rem;
+    }
+    button.secondary { background: #e7e5e4; color: #1c1917; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    ul.reports { list-style: none; padding: 0; margin: 0; }
+    ul.reports li {
+      border-bottom: 1px solid #f5f5f4; padding: 0.65rem 0; cursor: pointer;
+    }
+    ul.reports li:hover { background: #fafaf9; margin: 0 -0.5rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    .meta { font-size: 0.8rem; color: #78716c; }
+    .err { color: #b91c1c; font-size: 0.9rem; }
+    pre.detail { white-space: pre-wrap; font-size: 0.8rem; background: #f5f5f4; padding: 0.75rem; border-radius: 8px; max-height: 50vh; overflow: auto; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    .badge-fail { background: #fee2e2; color: #991b1b; }
+    .detail-top { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin: 0.25rem 0 0.85rem; }
+    .pill { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; font-weight: 800; padding: 0.2rem 0.55rem; border-radius: 999px; border: 1px solid #e7e5e4; }
+    .pill-crit { background: #fee2e2; color: #7f1d1d; border-color: #fecaca; }
+    .pill-imp { background: #ffedd5; color: #7c2d12; border-color: #fed7aa; }
+    .pill-min { background: #e0f2fe; color: #075985; border-color: #bae6fd; }
+    .pill-info { background: #e7e5e4; color: #1c1917; }
+    .findings { display: grid; gap: 0.6rem; margin-top: 0.75rem; }
+    .finding { border: 1px solid #e7e5e4; border-radius: 10px; padding: 0.75rem 0.85rem; background: #fff; }
+    .finding-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+    .finding-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.5rem; }
+    .finding-loc { font-weight: 800; font-size: 0.85rem; }
+    .finding-cat { font-size: 0.75rem; color: #57534e; }
+    .finding-actions { display: flex; gap: 0.4rem; }
+    .btn-small { padding: 0.35rem 0.6rem; font-weight: 800; font-size: 0.75rem; border-radius: 8px; background: #134e4a; color: #fff; }
+    .btn-small.secondary { background: #e7e5e4; color: #1c1917; }
+    .finding-body { margin-top: 0.55rem; white-space: pre-wrap; font-size: 0.88rem; line-height: 1.55; color: #1c1917; }
+    details.raw { margin-top: 0.9rem; }
+    details.raw summary { cursor: pointer; font-weight: 700; color: #134e4a; }
+    .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>GitHub 审查报告</h1>
+  <p class="sub">按时间倒序分页浏览；可在此查看详情并 <strong>Agree</strong> 回写到 PR。概览页只显示最近几条。</p>
+  <p class="sub"><a href="/app">← GitHub 概览</a> · <a href="/">首页</a> · <a href="/app-gitee">Gitee 控制台</a></p>
+
+  <div id="gate" class="card"></div>
+  <div id="main" style="display:none;">
+    <div class="card">
+      <h2 style="margin:0 0 0.75rem;font-size:1rem;">全部报告</h2>
+      <div class="pager">
+        <button type="button" class="secondary" id="btnPrev">上一页</button>
+        <button type="button" class="secondary" id="btnNext">下一页</button>
+        <span id="pageInfo" class="meta"></span>
+      </div>
+      <ul class="reports" id="reportList"></ul>
+      <div class="pager" style="margin-top:0.75rem;margin-bottom:0;">
+        <button type="button" class="secondary" id="btnPrev2">上一页</button>
+        <button type="button" class="secondary" id="btnNext2">下一页</button>
+      </div>
+    </div>
+    <div id="detail" class="card" style="display:none;"></div>
+  </div>
+
+  <script>
+    const API = "";
+    const PAGE = 20;
+    let offset = 0;
+
+    async function j(url, opt) {
+      const r = await fetch(API + url, { credentials: "include", ...opt });
+      return r.json();
+    }
+
+    function wirePager(total) {
+      const info = document.getElementById("pageInfo");
+      const end = Math.min(offset + PAGE, total);
+      const start = total === 0 ? 0 : offset + 1;
+      info.textContent = total ? ("共 " + total + " 条，显示第 " + start + "–" + end + " 条") : "暂无报告";
+      const prevD = offset <= 0;
+      const nextD = offset + PAGE >= total;
+      ["btnPrev", "btnPrev2"].forEach((id) => {
+        document.getElementById(id).disabled = prevD;
+      });
+      ["btnNext", "btnNext2"].forEach((id) => {
+        document.getElementById(id).disabled = nextD;
+      });
+    }
+
+    async function loadList() {
+      const list = await j("/api/saas/reports?limit=" + PAGE + "&offset=" + offset);
+      const ul = document.getElementById("reportList");
+      ul.innerHTML = "";
+      if (!list.ok) {
+        ul.innerHTML = "<li class='err'>加载失败: " + (list.detail || list.error || "") + "</li>";
+        return;
+      }
+      const data = list.data || {};
+      const items = data.items || [];
+      const total = typeof data.total === "number" ? data.total : items.length;
+      wirePager(total);
+      if (!items.length) {
+        ul.innerHTML = "<li class='meta'>暂无报告。</li>";
+        return;
+      }
+      items.forEach((it) => {
+        const li = document.createElement("li");
+        const b = it.status === "completed"
+          ? "<span class='badge badge-ok'>完成</span>"
+          : "<span class='badge badge-fail'>失败</span>";
+        li.innerHTML = b + "<strong>" + it.path_with_namespace + "</strong> PR #" + it.pr_number +
+          "<div class='meta'>" + (it.created_at || "") + " · " + (it.pr_title || "") + "</div>";
+        li.onclick = () => loadDetail(it.id);
+        ul.appendChild(li);
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function severityPill(sev) {
+      const s = String(sev || "").toLowerCase();
+      if (s.includes("crit")) return ["Critical", "pill pill-crit"];
+      if (s.includes("important") || s.includes("high")) return ["Important", "pill pill-imp"];
+      if (s.includes("minor") || s.includes("low")) return ["Minor", "pill pill-min"];
+      return [sev || "Info", "pill pill-info"];
+    }
+
+    function renderFinding(c, idx) {
+      const file = (c && c.file) ? String(c.file) : "(unknown)";
+      const line = (c && (c.line !== undefined && c.line !== null && c.line !== "")) ? String(c.line) : "";
+      const loc = line ? `${file}:${line}` : file;
+      const cat = (c && c.category) ? String(c.category) : "";
+      const sug = (c && (c.suggestion || c.content)) ? String(c.suggestion || c.content) : "";
+      const [sevLabel, sevCls] = severityPill(c && c.severity);
+      const bodyId = "fb-" + idx;
+      const short = sug.length > 220 ? (sug.slice(0, 220) + "…") : sug;
+      const showToggle = sug.length > 220;
+      return `
+        <div class="finding">
+          <div class="finding-head">
+            <div class="finding-meta">
+              <span class="${sevCls}">${escapeHtml(sevLabel)}</span>
+              <span class="finding-loc">${escapeHtml(loc)}</span>
+              ${cat ? `<span class="finding-cat">${escapeHtml(cat)}</span>` : ``}
+            </div>
+            <div class="finding-actions">
+              <button type="button" class="btn-small" data-post-one="${idx}">提交这一条</button>
+              <button type="button" class="btn-small secondary" data-copy="${escapeHtml(loc)}">复制</button>
+              ${showToggle ? `<button type="button" class="btn-small" data-toggle="${bodyId}">展开</button>` : ``}
+            </div>
+          </div>
+          <div class="finding-body" id="${bodyId}" style="${showToggle ? "display:none;" : ""}">${escapeHtml(sug || "")}</div>
+          ${showToggle ? `<div class="finding-body" id="${bodyId}-short" style="display:block;color:#57534e;">${escapeHtml(short)}</div>` : ``}
+        </div>
+      `;
+    }
+
+    async function loadDetail(id) {
+      const dEl = document.getElementById("detail");
+      dEl.style.display = "block";
+      dEl.innerHTML = "加载中…";
+      dEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const r = await j("/api/saas/reports/" + id);
+      if (!r.ok || !r.data) {
+        dEl.innerHTML = "<p class='err'>加载失败</p>";
+        return;
+      }
+      const d = r.data;
+      let body = "<p><strong>" + d.path_with_namespace + "</strong> PR #" + d.pr_number + "</p>";
+      if (d.error) body += "<p class='err'>" + d.error + "</p>";
+      const comments = (d.result && d.result.comments) ? d.result.comments : [];
+      const count = Array.isArray(comments) ? comments.length : 0;
+      body += "<div class='detail-top'><div class='meta'>共 <strong>" + count + "</strong> 条意见</div>" +
+        "<div><button type='button' id='btnAgree'>提交全部到 GitHub PR</button></div></div>";
+      if (Array.isArray(comments) && comments.length) {
+        body += "<div class='findings'>" + comments.map((c, idx) => renderFinding(c, idx)).join("") + "</div>";
+      } else if (d.result) {
+        body += "<p class='meta'>暂无结构化意见，以下为原始结果。</p>";
+      }
+      if (d.result) {
+        body += "<details class='raw'><summary>查看原始 JSON</summary><pre class='detail'>" +
+          escapeHtml(JSON.stringify(d.result, null, 2)) + "</pre></details>";
+      }
+      dEl.innerHTML = body;
+      const btn = document.getElementById("btnAgree");
+      if (btn) {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          const res = await j("/api/saas/github/reports/" + id + "/agree", { method: "POST" });
+          btn.disabled = false;
+          if (!res.ok) {
+            alert("回写失败: " + (res.detail || res.error || "未知错误"));
+            return;
+          }
+          alert("已回写到 GitHub PR");
+        };
+      }
+      document.querySelectorAll("[data-copy]").forEach((el) => {
+        el.onclick = async () => {
+          const text = el.getAttribute("data-copy") || "";
+          try {
+            await navigator.clipboard.writeText(text);
+            el.textContent = "已复制";
+            setTimeout(() => (el.textContent = "复制"), 900);
+          } catch (e) {
+            alert("复制失败，请手动复制");
+          }
+        };
+      });
+      document.querySelectorAll("[data-toggle]").forEach((el) => {
+        el.onclick = () => {
+          const target = el.getAttribute("data-toggle");
+          const b = document.getElementById(target);
+          if (!b) return;
+          const shortEl = document.getElementById(target + "-short");
+          const isHidden = b.style.display === "none";
+          b.style.display = isHidden ? "block" : "none";
+          if (shortEl) shortEl.style.display = isHidden ? "none" : "block";
+          el.textContent = isHidden ? "收起" : "展开";
+        };
+      });
+      document.querySelectorAll("[data-post-one]").forEach((el) => {
+        el.onclick = async () => {
+          const idx = el.getAttribute("data-post-one");
+          el.disabled = true;
+          const res = await j("/api/saas/github/reports/" + id + "/agree?idx=" + encodeURIComponent(idx), { method: "POST" });
+          el.disabled = false;
+          if (!res.ok) {
+            alert("提交失败: " + (res.detail || res.error || "未知错误"));
+            return;
+          }
+          alert("已提交这一条到 GitHub PR");
+        };
+      });
+    }
+
+    function goPrev() {
+      offset = Math.max(0, offset - PAGE);
+      loadList();
+      document.getElementById("detail").style.display = "none";
+    }
+    function goNext() {
+      offset += PAGE;
+      loadList();
+      document.getElementById("detail").style.display = "none";
+    }
+
+    async function init() {
+      const gate = document.getElementById("gate");
+      const me = await j("/api/saas/me");
+      if (!me.authenticated) {
+        gate.innerHTML = "<p>请先 <a class='login-link' href='/auth/github/install'>安装/连接 GitHub App</a> 后查看报告。</p>";
+        return;
+      }
+      gate.style.display = "none";
+      document.getElementById("main").style.display = "block";
+      document.getElementById("btnPrev").onclick = goPrev;
+      document.getElementById("btnNext").onclick = goNext;
+      document.getElementById("btnPrev2").onclick = goPrev;
+      document.getElementById("btnNext2").onclick = goNext;
+      await loadList();
+    }
+
+    init();
+  </script>
+</body>
+</html>

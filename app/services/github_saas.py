@@ -14,7 +14,7 @@ from app.routers.gitee import FetchPRRequest, run_fetch_pr
 from app.routers.review import ReviewRequest, run_review_core
 from app.services.github_app import get_installation_token
 from app.services.github_checks import complete_check_run, create_check_run
-from app.services.gitee_saas import platform_llm_key
+from app.services.llm_user_resolve import resolve_llm_for_review
 from app.storage.db import create_db_engine
 from app.storage.models import GitHubPrBinding, PrReviewReport
 
@@ -81,9 +81,18 @@ def process_saas_github_pull_request_webhook(
 
     pr_url = pr.get("html_url") or f"https://github.com/{owner}/{repo_name}/pull/{pr_number}"
 
-    provider, llm_key = platform_llm_key()
+    resolved = resolve_llm_for_review(app_user_id)
+    provider, llm_key, api_model = resolved.provider, resolved.api_key, resolved.api_model
     if not llm_key:
-        _save_report_failed(engine, app_user_id, f"{owner}/{repo_name}", pr_number, head_sha or None, pr.get("title"), "平台未配置 LLM API Key")
+        _save_report_failed(
+            engine,
+            app_user_id,
+            f"{owner}/{repo_name}",
+            pr_number,
+            head_sha or None,
+            pr.get("title"),
+            "未配置 LLM API Key（用户默认凭证与平台环境变量均无）",
+        )
         return
 
     try:
@@ -127,7 +136,11 @@ def process_saas_github_pull_request_webhook(
 
     data = out["data"]
 
-    use_default = provider == "dashscope" and _env_bool("SAAS_WEBHOOK_USE_DEFAULT_REVIEW", default=True)
+    use_default = (
+        provider == "dashscope"
+        and _env_bool("SAAS_WEBHOOK_USE_DEFAULT_REVIEW", default=True)
+        and api_model is None
+    )
     try:
         default_passes = int(os.getenv("SAAS_WEBHOOK_DEFAULT_PASSES", "8"))
     except ValueError:
@@ -140,6 +153,7 @@ def process_saas_github_pull_request_webhook(
         file_contexts=data.get("file_contexts") or {},
         llm_provider=provider,
         llm_api_key=llm_key,
+        llm_model=api_model,
         use_mock=False,
         use_default_review=use_default,
         default_passes=default_passes,

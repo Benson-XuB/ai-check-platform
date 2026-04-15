@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>审查报告 · Gitee · AI PR Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
+    .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    a { color: #134e4a; font-weight: 600; }
+    a.login-link {
+      display: inline-block; padding: 0.5rem 1rem; background: #c71d23; color: #fff !important;
+      text-decoration: none; border-radius: 8px;
+    }
+    .card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; background: #fff; }
+    button {
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+      background: #c71d23; color: #fff; margin-right: 0.5rem; margin-top: 0.25rem;
+    }
+    button.secondary { background: #e7e5e4; color: #1c1917; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    ul.reports { list-style: none; padding: 0; margin: 0; }
+    ul.reports li {
+      border-bottom: 1px solid #f5f5f4; padding: 0.65rem 0; cursor: pointer;
+    }
+    ul.reports li:hover { background: #fafaf9; margin: 0 -0.5rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    .meta { font-size: 0.8rem; color: #78716c; }
+    .err { color: #b91c1c; font-size: 0.9rem; }
+    pre.detail { white-space: pre-wrap; font-size: 0.8rem; background: #f5f5f4; padding: 0.75rem; border-radius: 8px; max-height: 50vh; overflow: auto; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    .badge-fail { background: #fee2e2; color: #991b1b; }
+    .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+  </style>
+</head>
+<body>
+  <h1>Gitee 审查报告</h1>
+  <p class="sub">按时间倒序浏览全部自动审查记录；概览页只显示最近几条。</p>
+  <p class="sub"><a href="/app-gitee">← Gitee 概览</a> · <a href="/">首页</a> · <a href="/app">GitHub 控制台</a></p>
+
+  <div id="gate" class="card"></div>
+  <div id="main" style="display:none;">
+    <div class="card">
+      <h2 style="margin:0 0 0.75rem;font-size:1rem;">全部报告</h2>
+      <div class="pager">
+        <button type="button" class="secondary" id="btnPrev">上一页</button>
+        <button type="button" class="secondary" id="btnNext">下一页</button>
+        <span id="pageInfo" class="meta"></span>
+      </div>
+      <ul class="reports" id="reportList"></ul>
+      <div class="pager" style="margin-top:0.75rem;margin-bottom:0;">
+        <button type="button" class="secondary" id="btnPrev2">上一页</button>
+        <button type="button" class="secondary" id="btnNext2">下一页</button>
+      </div>
+    </div>
+    <div id="detail" class="card" style="display:none;"></div>
+  </div>
+
+  <script>
+    const API = "";
+    const PAGE = 20;
+    let offset = 0;
+
+    async function j(url, opt) {
+      const r = await fetch(API + url, { credentials: "include", ...opt });
+      return r.json();
+    }
+
+    function wirePager(total) {
+      const info = document.getElementById("pageInfo");
+      const end = Math.min(offset + PAGE, total);
+      const start = total === 0 ? 0 : offset + 1;
+      info.textContent = total ? ("共 " + total + " 条，显示第 " + start + "–" + end + " 条") : "暂无报告";
+      const prevD = offset <= 0;
+      const nextD = offset + PAGE >= total;
+      ["btnPrev", "btnPrev2"].forEach((id) => {
+        document.getElementById(id).disabled = prevD;
+      });
+      ["btnNext", "btnNext2"].forEach((id) => {
+        document.getElementById(id).disabled = nextD;
+      });
+    }
+
+    async function loadList() {
+      const list = await j("/api/saas/gitee/reports?limit=" + PAGE + "&offset=" + offset);
+      const ul = document.getElementById("reportList");
+      ul.innerHTML = "";
+      if (!list.ok) {
+        ul.innerHTML = "<li class='err'>加载失败: " + (list.detail || list.error || "") + "</li>";
+        return;
+      }
+      const data = list.data || {};
+      const items = data.items || [];
+      const total = typeof data.total === "number" ? data.total : items.length;
+      wirePager(total);
+      if (!items.length) {
+        ul.innerHTML = "<li class='meta'>暂无报告。</li>";
+        return;
+      }
+      items.forEach((it) => {
+        const li = document.createElement("li");
+        const b = it.status === "completed"
+          ? "<span class='badge badge-ok'>完成</span>"
+          : "<span class='badge badge-fail'>失败</span>";
+        li.innerHTML = b + "<strong>" + it.path_with_namespace + "</strong> PR #" + it.pr_number +
+          "<div class='meta'>" + (it.created_at || "") + " · " + (it.pr_title || "") + "</div>";
+        li.onclick = () => loadDetail(it.id);
+        ul.appendChild(li);
+      });
+    }
+
+    async function loadDetail(id) {
+      const dEl = document.getElementById("detail");
+      dEl.style.display = "block";
+      dEl.innerHTML = "加载中…";
+      dEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const r = await j("/api/saas/gitee/reports/" + id);
+      if (!r.ok || !r.data) {
+        dEl.innerHTML = "<p class='err'>加载失败</p>";
+        return;
+      }
+      const d = r.data;
+      let body = "<p><strong>" + d.path_with_namespace + "</strong> PR #" + d.pr_number + "</p>";
+      if (d.error) body += "<p class='err'>" + d.error + "</p>";
+      if (d.result && d.result.comments) {
+        body += "<p>共 " + d.result.comments.length + " 条意见</p><pre class='detail'>" +
+          JSON.stringify(d.result.comments, null, 2) + "</pre>";
+      } else if (d.result) {
+        body += "<pre class='detail'>" + JSON.stringify(d.result, null, 2) + "</pre>";
+      }
+      dEl.innerHTML = body;
+    }
+
+    function goPrev() {
+      offset = Math.max(0, offset - PAGE);
+      loadList();
+      document.getElementById("detail").style.display = "none";
+    }
+    function goNext() {
+      offset += PAGE;
+      loadList();
+      document.getElementById("detail").style.display = "none";
+    }
+
+    async function init() {
+      const gate = document.getElementById("gate");
+      const me = await j("/api/saas/gitee/me");
+      if (!me.authenticated) {
+        gate.innerHTML = "<p>请先 <a class='login-link' href='/auth/gitee/login'>使用 Gitee 登录</a> 后查看报告。</p>";
+        return;
+      }
+      gate.style.display = "none";
+      document.getElementById("main").style.display = "block";
+      document.getElementById("btnPrev").onclick = goPrev;
+      document.getElementById("btnNext").onclick = goNext;
+      document.getElementById("btnPrev2").onclick = goPrev;
+      document.getElementById("btnNext2").onclick = goNext;
+      await loadList();
+    }
+
+    init();
+  </script>
+</body>
+</html>
