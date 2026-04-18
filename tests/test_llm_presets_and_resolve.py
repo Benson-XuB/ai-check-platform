@@ -8,6 +8,7 @@ def test_preset_catalog_has_domestic_and_intl():
     ids = {p["id"] for p in list_presets_public()}
     assert "dashscope:qwen-plus" in ids
     assert "kimi:moonshot-v1-32k" in ids
+    assert "kimi:kimi-coding" in ids
     assert "openai:gpt-4o-mini" in ids
     assert "anthropic:claude-3-5-sonnet-20241022" in ids
     assert "deepseek-official:deepseek-chat" in ids

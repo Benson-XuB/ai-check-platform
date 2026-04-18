@@ -67,6 +67,13 @@ _LL_PRESETS: tuple[LlmPreset, ...] = (
         "Kimi · kimi-k2-0711-preview",
         "国内 · Kimi",
     ),
+    LlmPreset(
+        "kimi:kimi-coding",
+        "kimi",
+        "kimi-for-coding",
+        "Kimi Code · kimi-for-coding",
+        "国内 · Kimi Code",
+    ),
     # —— 国内 · DeepSeek 官方 API（LiteLLM）——
     LlmPreset(
         "deepseek-official:deepseek-chat",
