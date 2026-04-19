@@ -20,8 +20,9 @@ class ReviewRequest(BaseModel):
     file_contexts: Optional[Dict[str, str]] = None
     llm_provider: str = Field(default_factory=get_public_default_llm_provider)
     llm_api_key: str = ""
-    # 非空：dashscope→单模型通义；kimi→Moonshot；litellm→api_model 为 LiteLLM 完整 model 串
+    # 非空：dashscope→单模型通义；kimi→Moonshot；litellm→api_model 为 LiteLLM 完整 model 串；custom→配合 llm_custom_base_url
     llm_model: Optional[str] = None
+    llm_custom_base_url: Optional[str] = None
     use_mock: bool = False
     use_multipass: bool = False  # 三阶段审查：Pass1 预筛选 + Pass2 主审查 + Pass3 深化 Critical（仅 DashScope）
     use_semantic_context: bool = False  # 用 diff 向量检索 Top-K 相关代码片段并入上下文（仅 DashScope）
@@ -45,7 +46,7 @@ def public_config():
     return {
         "default_llm_provider": p,
         "llm_key_label": labels.get(p, labels["dashscope"]),
-        "supported_llm_providers": ["dashscope", "kimi", "litellm"],
+        "supported_llm_providers": ["dashscope", "kimi", "litellm", "custom"],
     }
 
 
@@ -76,7 +77,18 @@ def run_review_core(req: ReviewRequest) -> dict:
             pass
     try:
         model_override = (req.llm_model or "").strip() or None
-        if req.llm_provider == "kimi":
+        custom_base = (req.llm_custom_base_url or "").strip() or None
+        if req.llm_provider == "custom" and custom_base and model_override:
+            comments = review_svc.call_custom_endpoint(
+                req.diff,
+                req.llm_api_key,
+                custom_base,
+                model_override,
+                pr_title=req.pr_title,
+                pr_body=req.pr_body,
+                file_contexts=file_contexts,
+            )
+        elif req.llm_provider == "kimi":
             comments = review_svc.call_kimi(
                 req.diff,
                 req.llm_api_key,

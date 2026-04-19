@@ -33,7 +33,7 @@
 </head>
 <body>
   <h1>审查用模型与 API Key</h1>
-  <p class="sub">从预设中选择模型并保存 Key；可测试连通性。设为默认后，GitHub PR 自动审查优先使用；失败或未配置时回退站点环境变量。说明见 <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener">LiteLLM Providers</a>（Kimi 为 Moonshot 官方接口）。</p>
+  <p class="sub">可选<strong>预设模型</strong>，或填写<strong>自定义 HTTPS Base URL + 模型名</strong>（保存前会测试）。设为默认后 PR 审查优先使用。说明见 <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener">LiteLLM Providers</a>。</p>
   <p class="sub"><a href="/app">←返回 GitHub 概览</a> · <a href="/">首页</a> · <a href="/app-gitee">Gitee 控制台</a></p>
 
   <div id="gate" class="card"></div>
@@ -90,6 +90,9 @@
         box.className = "card";
         box.innerHTML =
           "<div class='llm-row'><label>预设模型<br><select id='llmPreset' class='llm-in'>" + opts + "</select></label></div>" +
+          "<p class='meta' style='margin:0.35rem 0;'>— 或自定义端点（与预设二选一填写）—</p>" +
+          "<div class='llm-row'><label>自定义 Base URL（HTTPS）<br><input id='customBase' class='llm-in' type='url' placeholder='https://api.example.com/v1 或根路径'></label></div>" +
+          "<div class='llm-row'><label>自定义模型名<br><input id='customModel' class='llm-in' type='text' placeholder='如 kimi-for-coding'></label></div>" +
           "<div class='llm-row'><label>备注（可选）<br><input id='llmLabel' class='llm-in' type='text' placeholder='例如：公司账号'></label></div>" +
           "<div class='llm-row'><label>API Key<br><input id='llmKey' class='llm-in' type='password' autocomplete='off' placeholder='保存后仅显示为已配置'></label></div>" +
           "<div class='llm-row'><button type='button' id='llmTestNew'>测试（未保存）</button> <button type='button' id='llmSave'>保存</button> <span id='llmMsg' class='meta'></span></div>" +
@@ -104,11 +107,20 @@
         document.getElementById("llmTestNew").onclick = async () => {
           const preset_id = document.getElementById("llmPreset").value;
           const api_key = document.getElementById("llmKey").value;
+          const custom_base_url = (document.getElementById("customBase") || {}).value || "";
+          const custom_model = (document.getElementById("customModel") || {}).value || "";
           msg("测试中…");
+          const body = { api_key };
+          if (custom_base_url.trim() && custom_model.trim()) {
+            body.custom_base_url = custom_base_url.trim();
+            body.custom_model = custom_model.trim();
+          } else {
+            body.preset_id = preset_id;
+          }
           const r = await j("/api/saas/llm/credentials/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ preset_id, api_key }),
+            body: JSON.stringify(body),
           });
           msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
         };
@@ -116,15 +128,29 @@
           const preset_id = document.getElementById("llmPreset").value;
           const api_key = document.getElementById("llmKey").value;
           const label = document.getElementById("llmLabel").value;
+          const custom_base_url = (document.getElementById("customBase") || {}).value || "";
+          const custom_model = (document.getElementById("customModel") || {}).value || "";
           if (!api_key.trim()) {
             msg("请填写 API Key", true);
             return;
           }
+          const useCustom = custom_base_url.trim() && custom_model.trim();
+          if (!useCustom && !preset_id) {
+            msg("请选择预设，或填写自定义 Base URL 与模型名", true);
+            return;
+          }
           msg("保存中…");
+          const payload = { api_key, label };
+          if (useCustom) {
+            payload.custom_base_url = custom_base_url.trim();
+            payload.custom_model = custom_model.trim();
+          } else {
+            payload.preset_id = preset_id;
+          }
           const r = await j("/api/saas/llm/credentials", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ preset_id, api_key, label }),
+            body: JSON.stringify(payload),
           });
           if (!r.ok) {
             msg("保存失败: " + (r.detail || r.error || ""), true);

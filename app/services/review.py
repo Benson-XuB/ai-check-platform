@@ -1008,6 +1008,31 @@ def call_kimi(
     return _parse_review_output(content, diff)
 
 
+def call_custom_endpoint(
+    diff: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    pr_title: str = "",
+    pr_body: str = "",
+    file_contexts: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """用户自定义 Base URL + 模型名。"""
+    from app.services.llm_litellm import custom_endpoint_completion
+
+    prompt = _build_prompt(diff, pr_title, pr_body, file_contexts or {})
+    content = custom_endpoint_completion(
+        api_key,
+        base_url,
+        model,
+        prompt,
+        max_tokens=None,
+        temperature=0.3,
+        timeout=120.0,
+    )
+    return _parse_review_output(content, diff)
+
+
 def call_litellm(
     diff: str,
     api_key: str,

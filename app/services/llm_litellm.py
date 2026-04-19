@@ -1,10 +1,9 @@
 """
 LLM 单次补全：
-- Kimi / Moonshot：官方 OpenAI 兼容接口（openai SDK + MOONSHOT_BASE_URL）
- - 密钥以 sk-kimi- 开头时优先 api.kimi.com/coding/v1，否则优先 Moonshot 开放平台（.cn/.ai 或 MOONSHOT_BASE_URL）
-  - 鉴权类失败时在另一路重试，减少「密钥与域名不匹配」导致的 401
-- 通义 DashScope：LiteLLM「dashscope/模型名」
-- 其它（OpenAI / Anthropic / Gemini / DeepSeek / 智谱等）：LiteLLM 完整 model 字符串，provider 固定为 litellm
+- Kimi 开放平台（moonshot-v1-* 等）：OpenAI 兼容；sk-kimi- 优先 coding 的 /v1，否则 .cn/.ai；401 轮换
+- Kimi Code（kimi-for-coding）：Anthropic Messages API，base https://api.kimi.com/coding（与 Claude Code 文档一致）
+- 通义 DashScope：LiteLLM dashscope/
+- litellm：含 OpenAI、Gemini、Anthropic/Claude 等；Gemini 仅 Google 协议，无 Anthropic 线
 
 模型 ID 需与 LiteLLM 文档一致：https://docs.litellm.ai/docs/providers
 """
@@ -25,9 +24,70 @@ except Exception:  # pragma: no cover
     litellm = None  # type: ignore
 
 _KIMI_CODING_V1 = "https://api.kimi.com/coding/v1"
+# Anthropic SDK：与 Claude Code / Kimi 文档一致，根路径无 /v1（SDK 会拼 Messages 路径）
+_KIMI_CODING_ANTHROPIC_BASE = "https://api.kimi.com/coding"
 _MOONSHOT_CN = "https://api.moonshot.cn/v1"
 _MOONSHOT_AI = "https://api.moonshot.ai/v1"
 _KIMI_CODE_KEY_PREFIX = "sk-kimi-"
+# 仅这些模型走 Kimi Code 的 Anthropic 线（与 OpenAI /v1 二选一，此处统一用 Anthropic）
+_KIMI_CODE_ANTHROPIC_MODELS = frozenset({"kimi-for-coding"})
+
+
+def _use_kimi_code_anthropic(api_model: str) -> bool:
+    return (api_model or "").strip() in _KIMI_CODE_ANTHROPIC_MODELS
+
+
+def _anthropic_message_blocks_to_text(msg: Any) -> str:
+    """Anthropic Message.content：text / thinking 等块拼成可读字符串。"""
+    parts: list[str] = []
+    for block in getattr(msg, "content", None) or []:
+        btype = getattr(block, "type", None)
+        if btype is None and isinstance(block, dict):
+            btype = block.get("type")
+        if btype == "text":
+            t = getattr(block, "text", None) if not isinstance(block, dict) else block.get("text")
+            if t:
+                parts.append(str(t))
+        elif btype == "thinking" or btype == "redacted_thinking":
+            t = getattr(block, "thinking", None) or getattr(block, "text", None)
+            if t:
+                parts.append(str(t))
+    return "".join(parts).strip()
+
+
+def _kimi_code_anthropic_chat(
+    api_key: str,
+    api_model: str,
+    prompt: str,
+    *,
+    max_tokens: Optional[int],
+    temperature: float,
+    timeout: float,
+) -> str:
+    """Kimi Code：Anthropic 兼容网关（官方与 Claude Code 同路径）。"""
+    import anthropic
+
+    kwargs_client: dict[str, Any] = {
+        "api_key": (api_key or "").strip(),
+        "base_url": _KIMI_CODING_ANTHROPIC_BASE.rstrip("/"),
+        "timeout": timeout,
+    }
+    ua = _kimi_coding_user_agent()
+    if ua:
+        kwargs_client["default_headers"] = {"User-Agent": ua}
+    client = anthropic.Anthropic(**kwargs_client)
+    mt = max_tokens if max_tokens is not None else 4096
+    try:
+        msg = client.messages.create(
+            model=(api_model or "").strip(),
+            max_tokens=max(1, int(mt)),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+    except Exception as e:
+        logger.warning("kimi code anthropic failed model=%s: %s", api_model, e)
+        raise RuntimeError(f"Kimi Code (Anthropic) 调用失败: {e}") from e
+    return _anthropic_message_blocks_to_text(msg) or ""
 
 
 def _is_kimi_coding_base(base: str) -> bool:
@@ -230,6 +290,100 @@ def litellm_completion(
     return _extract_message_text(resp)
 
 
+def _custom_auth_like_error(exc: BaseException) -> bool:
+    """401/403 等不重试另一协议。"""
+    if _is_moonshot_unauthorized(exc):
+        return True
+    code = getattr(exc, "status_code", None)
+    if code in (401, 403):
+        return True
+    msg = str(exc).lower()
+    if "401" in msg or "403" in msg:
+        if "unauthorized" in msg or "forbidden" in msg or "invalid" in msg or "permission" in msg:
+            return True
+    return False
+
+
+def _exception_or_cause_auth_like(exc: BaseException) -> bool:
+    if _custom_auth_like_error(exc):
+        return True
+    c = getattr(exc, "__cause__", None)
+    if c is not None and _custom_auth_like_error(c):
+        return True
+    return False
+
+
+def custom_endpoint_completion(
+    api_key: str,
+    base_url_validated: str,
+    api_model: str,
+    prompt: str,
+    *,
+    max_tokens: Optional[int],
+    temperature: float,
+    timeout: float,
+) -> str:
+    """
+    用户自定义 HTTPS Base + 模型名。
+    Kimi Code（api.kimi.com/.../coding）且模型为 kimi-for-coding：先 Anthropic，非鉴权失败再试 OpenAI /v1。
+    其它：仅 OpenAI 兼容 chat.completions。
+    """
+    from app.services.llm_custom_url import (
+        is_kimi_coding_url,
+        normalize_openai_compatible_base,
+    )
+
+    m = (api_model or "").strip()
+    if not m:
+        raise ValueError("empty api_model")
+    base = (base_url_validated or "").strip().rstrip("/")
+
+    if is_kimi_coding_url(base) and m == "kimi-for-coding":
+        try:
+            return _kimi_code_anthropic_chat(
+                api_key, m, prompt, max_tokens=max_tokens, temperature=temperature, timeout=timeout
+            )
+        except Exception as e:
+            if _exception_or_cause_auth_like(e):
+                logger.warning("kimi code anthropic auth-like error, not falling back: %s", e)
+                raise RuntimeError(f"自定义端点调用失败: {e}") from e
+            logger.info("kimi code anthropic failed, trying OpenAI compatible: %s", e)
+            ob = normalize_openai_compatible_base(base)
+            try:
+                resp = _moonshot_chat_single(
+                    ob,
+                    api_key,
+                    m,
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    timeout=timeout,
+                )
+            except Exception as e2:
+                raise RuntimeError(f"自定义端点调用失败（Anthropic 与 OpenAI 均未成功）: {e2}") from e2
+            if not resp.choices:
+                return ""
+            return _moonshot_assistant_text(resp.choices[0].message)
+
+    ob = normalize_openai_compatible_base(base)
+    try:
+        resp = _moonshot_chat_single(
+            ob,
+            api_key,
+            m,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+        )
+    except Exception as e:
+        logger.warning("custom openai-compatible failed base=%s model=%s: %s", ob, m, e)
+        raise RuntimeError(f"自定义端点调用失败: {e}") from e
+    if not resp.choices:
+        return ""
+    return _moonshot_assistant_text(resp.choices[0].message)
+
+
 def completion_text(
     provider: str,
     api_key: str,
@@ -252,6 +406,10 @@ def completion_text(
         raise ValueError("empty api_model")
 
     if p == "kimi":
+        if _use_kimi_code_anthropic(m):
+            return _kimi_code_anthropic_chat(
+                api_key, m, prompt, max_tokens=max_tokens, temperature=temperature, timeout=timeout
+            )
         return _moonshot_chat(
             api_key, m, prompt, max_tokens=max_tokens, temperature=temperature, timeout=timeout
         )
@@ -271,4 +429,6 @@ def completion_text(
             timeout=timeout,
             base_url=extra_base or None,
         )
+    if p == "custom":
+        raise ValueError("provider=custom 应使用 custom_endpoint_completion(base_url, …)，勿直接走 completion_text")
     raise ValueError(f"unsupported provider: {provider}")

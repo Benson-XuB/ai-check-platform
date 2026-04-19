@@ -24,9 +24,10 @@ Source = Literal["user", "platform"]
 class ResolvedLlm:
     provider: str
     api_key: str
-    """DashScope 单模型审查时的 model；None 表示走平台默认多阶段 review_default_ai。"""
     api_model: Optional[str]
     source: Source
+    # provider=custom 时已校验的 Base URL；预设凭证时为 None
+    custom_base_url: Optional[str] = None
 
 
 def resolve_llm_for_review(app_user_id: int) -> ResolvedLlm:
@@ -38,8 +39,7 @@ def resolve_llm_for_review(app_user_id: int) -> ResolvedLlm:
                 if user and user.active_llm_credential_id:
                     cred = session.get(UserLlmCredential, user.active_llm_credential_id)
                     if cred and cred.user_id == user.id:
-                        preset = get_preset(cred.preset_id)
-                        if preset:
+                        if getattr(cred, "is_custom", False) and cred.custom_base_url and cred.custom_model:
                             try:
                                 key = decrypt_api_key(cred.api_key_encrypted)
                             except ValueError:
@@ -51,20 +51,46 @@ def resolve_llm_for_review(app_user_id: int) -> ResolvedLlm:
                             else:
                                 if key.strip():
                                     logger.info(
-                                        "SaaS review llm source=user user=%s preset=%s provider=%s",
+                                        "SaaS review llm source=user custom user=%s cred=%s",
                                         app_user_id,
-                                        cred.preset_id,
-                                        preset.provider,
+                                        cred.id,
                                     )
                                     return ResolvedLlm(
-                                        preset.provider,
+                                        "custom",
                                         key.strip(),
-                                        preset.api_model,
+                                        cred.custom_model.strip(),
                                         "user",
+                                        custom_base_url=cred.custom_base_url.strip(),
                                     )
                                 logger.warning("empty user llm key user=%s cred=%s", app_user_id, cred.id)
                         else:
-                            logger.warning("unknown preset_id=%s user=%s", cred.preset_id, app_user_id)
+                            preset = get_preset(cred.preset_id)
+                            if preset:
+                                try:
+                                    key = decrypt_api_key(cred.api_key_encrypted)
+                                except ValueError:
+                                    logger.warning(
+                                        "user llm credential decrypt failed user=%s cred=%s; fallback platform",
+                                        app_user_id,
+                                        cred.id,
+                                    )
+                                else:
+                                    if key.strip():
+                                        logger.info(
+                                            "SaaS review llm source=user user=%s preset=%s provider=%s",
+                                            app_user_id,
+                                            cred.preset_id,
+                                            preset.provider,
+                                        )
+                                        return ResolvedLlm(
+                                            preset.provider,
+                                            key.strip(),
+                                            preset.api_model,
+                                            "user",
+                                        )
+                                    logger.warning("empty user llm key user=%s cred=%s", app_user_id, cred.id)
+                            else:
+                                logger.warning("unknown preset_id=%s user=%s", cred.preset_id, app_user_id)
         except Exception:
             logger.exception("resolve_llm_for_review db error user=%s", app_user_id)
 

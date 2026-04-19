@@ -154,6 +154,7 @@ def process_saas_github_pull_request_webhook(
         llm_provider=provider,
         llm_api_key=llm_key,
         llm_model=api_model,
+        llm_custom_base_url=resolved.custom_base_url,
         use_mock=False,
         use_default_review=use_default,
         default_passes=default_passes,

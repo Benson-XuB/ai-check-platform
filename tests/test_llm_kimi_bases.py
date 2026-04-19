@@ -3,10 +3,12 @@
 from types import SimpleNamespace
 
 from app.services.llm_litellm import (
+    _anthropic_message_blocks_to_text,
     _is_kimi_coding_base,
     _kimi_coding_user_agent,
     _kimi_moonshot_endpoints_to_try,
     _moonshot_assistant_text,
+    _use_kimi_code_anthropic,
 )
 
 
@@ -50,3 +52,19 @@ def test_moonshot_assistant_text_reasoning_fallback():
     assert _moonshot_assistant_text(msg) == "hello"
     msg2 = SimpleNamespace(content="x", reasoning_content="y")
     assert _moonshot_assistant_text(msg2) == "x"
+
+
+def test_use_kimi_code_anthropic_only_kimi_for_coding():
+    assert _use_kimi_code_anthropic("kimi-for-coding") is True
+    assert _use_kimi_code_anthropic("moonshot-v1-32k") is False
+
+
+def test_anthropic_message_blocks_to_text():
+    class TB:
+        type = "text"
+        text = "hi"
+
+    class Msg:
+        content = [TB()]
+
+    assert _anthropic_message_blocks_to_text(Msg()) == "hi"

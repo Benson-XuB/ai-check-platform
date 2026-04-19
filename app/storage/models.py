@@ -84,13 +84,16 @@ class AppUser(Base):
 
 
 class UserLlmCredential(Base):
-    """用户为预设模型保存的 API Key（加密）；与 AppUser.active_llm_credential_id 配合作为默认审查凭证。"""
+    """用户为预设模型或自定义 Base+模型保存的 API Key（加密）；与 AppUser.active_llm_credential_id 配合作为默认审查凭证。"""
 
     __tablename__ = "user_llm_credentials"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("app_users.id"), nullable=False, index=True)
     preset_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    is_custom: Mapped[bool] = mapped_column(default=False, nullable=False)
+    custom_base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    custom_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
