@@ -6,7 +6,7 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -64,11 +64,23 @@ class CredentialPatch(BaseModel):
 
 
 class TestBody(BaseModel):
+    """与前端 JSON 字段一致；亦接受 camelCase（customBaseUrl / customModel）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     preset_id: Optional[str] = None
     api_key: Optional[str] = Field(None, max_length=2048)
     credential_id: Optional[int] = None
-    custom_base_url: Optional[str] = Field(None, max_length=2048)
-    custom_model: Optional[str] = Field(None, max_length=256)
+    custom_base_url: Optional[str] = Field(
+        None,
+        max_length=2048,
+        validation_alias=AliasChoices("custom_base_url", "customBaseUrl"),
+    )
+    custom_model: Optional[str] = Field(
+        None,
+        max_length=256,
+        validation_alias=AliasChoices("custom_model", "customModel"),
+    )
 
 
 @router.get("/presets")
@@ -308,9 +320,11 @@ def test_credential(request: Request, body: TestBody):
             preset = get_preset(row.preset_id)
             if not preset:
                 raise HTTPException(400, "凭证 preset 无效")
-    elif cu and cm:
+    elif cu or cm:
+        if not cu or not cm:
+            raise HTTPException(400, "自定义测试需同时提供 custom_base_url 与 custom_model")
         if not body.api_key or not body.api_key.strip():
-            raise HTTPException(400, "需要 api_key")
+            raise HTTPException(400, "自定义测试需提供 api_key")
         key = body.api_key.strip()
         try:
             validated = validate_custom_base_url(cu)
@@ -323,7 +337,10 @@ def test_credential(request: Request, body: TestBody):
         return {"ok": True}
     else:
         if not body.preset_id or not body.api_key or not body.api_key.strip():
-            raise HTTPException(400, "需要 preset_id + api_key，或 custom_base_url + custom_model + api_key，或 credential_id")
+            raise HTTPException(
+                400,
+                "需要 preset_id + api_key，或 custom_base_url + custom_model + api_key，或 credential_id",
+            )
         preset = get_preset(body.preset_id.strip())
         if not preset:
             raise HTTPException(400, "未知的 preset_id")
