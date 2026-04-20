@@ -103,7 +103,7 @@
 </head>
 <body>
   <h1>审查用模型与 API Key</h1>
-  <p class="sub">填写<strong>自定义 HTTPS Base URL + 模型名</strong>与 API Key（保存前可测试连通性；Kimi Code 的 <code>kimi-for-coding</code> 将优先走 Anthropic 协议）。设为默认后 WebHook 优先使用；未配置时回退站点环境变量。</p>
+  <p class="sub">填写<strong>自定义 HTTPS Base URL + 模型名</strong>与 API Key（保存前可测试连通性；保存时会探测走 Anthropic 还是 LiteLLM）。设为默认后 WebHook 优先使用；未配置时回退站点环境变量。浏览器里「测试」接口 HTTP 多为 200，若 JSON 提示 <code>401</code>，一般是<strong>上游模型服务</strong>拒绝密钥，不是本站会话失效。</p>
   <p class="sub"><a href="/app-gitee">←返回 Gitee 概览</a> · <a href="/">首页</a> · <a href="/app">GitHub 控制台</a></p>
 
   <div id="gate" class="card"></div>
@@ -111,6 +111,15 @@
 
   <script>
     const API = "";
+    let llmTestInFlight = false;
+    function setLlmTestUiBusy(busy) {
+      llmTestInFlight = busy;
+      const n = document.getElementById("llmTestNew");
+      if (n) n.disabled = busy;
+      document.querySelectorAll("button[data-act='test']").forEach((b) => {
+        b.disabled = busy;
+      });
+    }
 
     async function j(url, opt) {
       const r = await fetch(API + url, { credentials: "include", ...opt });
@@ -168,6 +177,7 @@
           el.className = err ? "err" : "meta";
         };
         document.getElementById("llmTestNew").onclick = async () => {
+          if (llmTestInFlight) return;
           const api_key = document.getElementById("llmKey").value;
           const custom_base_url = (document.getElementById("customBase") || {}).value || "";
           const custom_model = (document.getElementById("customModel") || {}).value || "";
@@ -175,18 +185,23 @@
             msg("请填写 Base URL、模型名与 API Key", true);
             return;
           }
+          setLlmTestUiBusy(true);
           msg("测试中…");
-          const body = {
-            api_key,
-            custom_base_url: custom_base_url.trim(),
-            custom_model: custom_model.trim(),
-          };
-          const r = await j("/api/saas/llm/credentials/test", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+          try {
+            const body = {
+              api_key,
+              custom_base_url: custom_base_url.trim(),
+              custom_model: custom_model.trim(),
+            };
+            const r = await j("/api/saas/llm/credentials/test", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+          } finally {
+            setLlmTestUiBusy(false);
+          }
         };
         document.getElementById("llmSave").onclick = async () => {
           const api_key = document.getElementById("llmKey").value;
@@ -237,13 +252,19 @@
               return;
             }
             if (act === "test") {
+              if (llmTestInFlight) return;
+              setLlmTestUiBusy(true);
               msg("测试中…");
-              const r = await j("/api/saas/llm/credentials/test", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ credential_id: id }),
-              });
-              msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+              try {
+                const r = await j("/api/saas/llm/credentials/test", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ credential_id: id }),
+                });
+                msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
+              } finally {
+                setLlmTestUiBusy(false);
+              }
             }
           };
         });

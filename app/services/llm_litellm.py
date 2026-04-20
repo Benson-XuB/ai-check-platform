@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,78 @@ def _exception_or_cause_auth_like(exc: BaseException) -> bool:
     return False
 
 
+def _host_only_for_diag(url: str) -> str:
+    try:
+        p = urlparse((url or "").strip())
+        if p.netloc:
+            return p.netloc
+        return ((url or "").strip()[:80] or "(空)")
+    except Exception:
+        return (url or "")[:80] or "(空)"
+
+
+def _is_timeout_like_error(exc: BaseException) -> bool:
+    """识别读超时/连接超时（含异常链上的 httpx 超时类型）。"""
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        try:
+            import httpx
+
+            if isinstance(
+                cur,
+                (
+                    httpx.ReadTimeout,
+                    httpx.ConnectTimeout,
+                    httpx.WriteTimeout,
+                    httpx.PoolTimeout,
+                    httpx.TimeoutException,
+                ),
+            ):
+                return True
+        except Exception:
+            pass
+        msg = str(cur).lower()
+        if "timed out" in msg or "timeout" in msg or "read time out" in msg:
+            return True
+        nxt = getattr(cur, "__cause__", None)
+        if nxt is None:
+            nxt = getattr(cur, "__context__", None)
+        cur = nxt
+    return False
+
+
+def _log_and_raise_custom_endpoint_error(
+    backend: str,
+    *,
+    base_stored: str,
+    litellm_effective_base: Optional[str],
+    model: str,
+    timeout_sec: float,
+    exc: BaseException,
+) -> None:
+    """写日志并把可诊断信息拼进异常文案，便于报告页与日志对照。"""
+    host = _host_only_for_diag(base_stored)
+    timeout_like = _is_timeout_like_error(exc)
+    bits = [
+        f"调用方式={backend}",
+        f"主机={host}",
+        f"模型={model}",
+        f"客户端读超时={int(timeout_sec)}s",
+    ]
+    if backend == "litellm" and litellm_effective_base:
+        bits.append(f"LiteLLM基址={litellm_effective_base}")
+    if timeout_like:
+        bits.append("原因归类=读超时或连接超时(上游在限时内未返回完整响应)")
+    diag = "[诊断] " + "；".join(bits)
+    if timeout_like:
+        logger.error("%s | 原始错误: %s", diag, exc, exc_info=True)
+    else:
+        logger.warning("%s | 原始错误: %s", diag, exc, exc_info=True)
+    raise RuntimeError(f"自定义端点调用失败: {exc} | {diag}") from exc
+
+
 def _custom_litellm_model_id(api_model: str) -> str:
     """自定义端点走 LiteLLM OpenAI 兼容时：openai/<deployment>；已带 openai/、azure/ 前缀则原样。"""
     m = (api_model or "").strip()
@@ -439,8 +512,14 @@ def custom_endpoint_completion(
                 timeout=timeout,
             )
         except Exception as e:
-            logger.warning("custom anthropic failed: %s", e)
-            raise RuntimeError(f"自定义端点调用失败: {e}") from e
+            _log_and_raise_custom_endpoint_error(
+                "anthropic",
+                base_stored=base_url_validated,
+                litellm_effective_base=None,
+                model=m,
+                timeout_sec=timeout,
+                exc=e,
+            )
 
     if backend == "litellm":
         ob = normalize_openai_compatible_base(base_url_validated)
@@ -455,8 +534,14 @@ def custom_endpoint_completion(
                 base_url=ob,
             )
         except Exception as e:
-            logger.warning("custom litellm failed base=%s model=%s: %s", ob, m, e)
-            raise RuntimeError(f"自定义端点调用失败: {e}") from e
+            _log_and_raise_custom_endpoint_error(
+                "litellm",
+                base_stored=base_url_validated,
+                litellm_effective_base=ob,
+                model=m,
+                timeout_sec=timeout,
+                exc=e,
+            )
 
     raise ValueError(f"unsupported custom completion_backend: {backend}")
 

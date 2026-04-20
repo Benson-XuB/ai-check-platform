@@ -1,9 +1,10 @@
 """AI 审查服务：调用 LLM，解析结构化输出。"""
 
+import hashlib
 import json
+import os
 import random
 import re
-import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 REVIEW_CATEGORIES = "logic|design|readability|edge_case|semantic|security"
@@ -1008,6 +1009,17 @@ def call_kimi(
     return _parse_review_output(content, diff)
 
 
+def _review_custom_llm_timeout_sec() -> float:
+    """PR 审查走自定义端点时的读超时（秒）；大 diff / 慢模型可设 REVIEW_CUSTOM_LLM_TIMEOUT_SEC=300。"""
+    raw = (os.getenv("REVIEW_CUSTOM_LLM_TIMEOUT_SEC") or "").strip()
+    if not raw:
+        return 120.0
+    try:
+        return max(30.0, min(float(raw), 900.0))
+    except ValueError:
+        return 120.0
+
+
 def call_custom_endpoint(
     diff: str,
     api_key: str,
@@ -1030,7 +1042,7 @@ def call_custom_endpoint(
         prompt,
         max_tokens=None,
         temperature=0.3,
-        timeout=120.0,
+        timeout=_review_custom_llm_timeout_sec(),
         completion_backend=completion_backend,
     )
     return _parse_review_output(content, diff)
