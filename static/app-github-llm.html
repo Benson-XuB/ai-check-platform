@@ -6,7 +6,7 @@
   <title>模型与密钥 · GitHub · AI PR Review</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
+    body { font-family: system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; color: #1c1917; }
     h1 { font-size: 1.35rem; margin: 0 0 0.5rem; }
     .sub { color: #57534e; font-size: 0.9rem; margin-bottom: 1.5rem; }
     a { color: #134e4a; font-weight: 600; }
@@ -23,12 +23,82 @@
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .meta { font-size: 0.8rem; color: #78716c; }
     .err { color: #b91c1c; font-size: 0.9rem; }
-    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
+    .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.45rem; border-radius: 4px; white-space: nowrap; display: inline-block; vertical-align: middle; }
     .badge-ok { background: #d1fae5; color: #065f46; }
     input.llm-in, select.llm-in { width: 100%; max-width: 28rem; padding: 0.45rem 0.5rem; border: 1px solid #e7e5e4; border-radius: 8px; font: inherit; box-sizing: border-box; }
     .llm-row { margin: 0.5rem 0; }
-    table.llm-t { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    table.llm-t th, table.llm-t td { text-align: left; padding: 0.4rem 0.35rem; border-bottom: 1px solid #f5f5f4; }
+    .llm-t-wrap {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin-top: 0.5rem;
+      border: 1px solid #e7e5e4;
+      border-radius: 10px;
+      background: #fafaf9;
+    }
+    table.llm-t {
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+      background: #fff;
+    }
+    table.llm-t thead th {
+      text-align: left;
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      color: #44403c;
+      white-space: nowrap;
+      border-bottom: 1px solid #e7e5e4;
+      background: #fafaf9;
+    }
+    table.llm-t tbody td {
+      text-align: left;
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid #f0ebe7;
+      vertical-align: middle;
+    }
+    table.llm-t tbody tr:last-child td { border-bottom: none; }
+    .llm-col-model { min-width: 0; max-width: 26rem; }
+    .llm-model-cell {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      line-height: 1.45;
+    }
+    .llm-model-text {
+      flex: 1 1 12rem;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .llm-col-note {
+      width: 9rem;
+      max-width: 12rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #57534e;
+    }
+    .llm-col-actions {
+      width: 1%;
+      white-space: nowrap;
+      text-align: right;
+    }
+    .llm-actions {
+      display: inline-flex;
+      flex-wrap: nowrap;
+      gap: 0.35rem;
+      justify-content: flex-end;
+      align-items: center;
+    }
+    button.llm-row-btn {
+      margin: 0;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.8125rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -57,13 +127,30 @@
           return;
         }
         const items = (cr.data && cr.data.items) || [];
+        const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         let rows = items.map((it) => {
-          const act = it.is_active ? " <span class='badge badge-ok'>默认</span>" : "";
-          const btns = "<button type='button' class='secondary' data-act='use' data-id=\"" + it.id + "\">设为默认</button> " +
-            "<button type='button' class='secondary' data-act='test' data-id=\"" + it.id + "\">测试</button> " +
-            "<button type='button' class='secondary' data-act='del' data-id=\"" + it.id + "\">删除</button>";
-          return "<tr><td>" + String(it.display_label || "").replace(/</g, "&lt;") + act + "</td><td>" +
-            (it.label ? it.label.replace(/</g, "&lt;") : "—") + "</td><td>" + btns + "</td></tr>";
+          const badge = it.is_active ? "<span class='badge badge-ok'>默认</span>" : "";
+          const labelRaw = (it.label || "").trim();
+          const noteCell = labelRaw
+            ? "<td class='llm-col-note' title=\"" + esc(labelRaw) + "\">" + esc(labelRaw) + "</td>"
+            : "<td class='llm-col-note'>—</td>";
+          const btns =
+            "<div class='llm-actions'>" +
+            "<button type='button' class='secondary llm-row-btn' data-act='use' data-id=\"" + it.id + "\">设为默认</button>" +
+            "<button type='button' class='secondary llm-row-btn' data-act='test' data-id=\"" + it.id + "\">测试</button>" +
+            "<button type='button' class='secondary llm-row-btn' data-act='del' data-id=\"" + it.id + "\">删除</button>" +
+            "</div>";
+          return (
+            "<tr><td class='llm-col-model'><div class='llm-model-cell'><span class='llm-model-text'>" +
+            esc(it.display_label || "") +
+            "</span>" +
+            badge +
+            "</div></td>" +
+            noteCell +
+            "<td class='llm-col-actions'>" +
+            btns +
+            "</td></tr>"
+          );
         }).join("");
         box.className = "card";
         box.innerHTML =
@@ -73,8 +160,8 @@
           "<div class='llm-row'><label>API Key<br><input id='llmKey' class='llm-in' type='password' autocomplete='off' placeholder='保存后仅显示为已配置'></label></div>" +
           "<div class='llm-row'><button type='button' id='llmTestNew'>测试（未保存）</button> <button type='button' id='llmSave'>保存</button> <span id='llmMsg' class='meta'></span></div>" +
           "<h3 style='margin:1rem 0 0.35rem;font-size:0.95rem;'>已保存</h3>" +
-          "<table class='llm-t'><thead><tr><th>模型</th><th>备注</th><th>操作</th></tr></thead><tbody>" +
-          (rows || "<tr><td colspan='3' class='meta'>暂无，请先保存一条</td></tr>") + "</tbody></table>";
+          "<div class='llm-t-wrap'><table class='llm-t'><thead><tr><th>模型</th><th>备注</th><th style='text-align:right;'>操作</th></tr></thead><tbody>" +
+          (rows || "<tr><td colspan='3' class='meta' style='padding:0.75rem;'>暂无，请先保存一条</td></tr>") + "</tbody></table></div>";
         const msg = (t, err) => {
           const el = document.getElementById("llmMsg");
           el.textContent = t || "";
