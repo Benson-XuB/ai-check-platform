@@ -1010,14 +1010,14 @@ def call_kimi(
 
 
 def _review_custom_llm_timeout_sec() -> float:
-    """PR 审查走自定义端点时的读超时（秒）；大 diff / 慢模型可设 REVIEW_CUSTOM_LLM_TIMEOUT_SEC=300。"""
+    """PR 审查走自定义端点时的读超时（秒）；默认 300（Kimi/Anthropic 大 MR 常超过 120s）。可用 REVIEW_CUSTOM_LLM_TIMEOUT_SEC 覆盖。"""
     raw = (os.getenv("REVIEW_CUSTOM_LLM_TIMEOUT_SEC") or "").strip()
     if not raw:
-        return 120.0
+        return 300.0
     try:
         return max(30.0, min(float(raw), 900.0))
     except ValueError:
-        return 120.0
+        return 300.0
 
 
 def call_custom_endpoint(

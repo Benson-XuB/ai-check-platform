@@ -28,6 +28,7 @@
     ul.reports li:hover { background: #fafaf9; margin: 0 -0.5rem; padding-left: 0.5rem; padding-right: 0.5rem; }
     .meta { font-size: 0.8rem; color: #78716c; }
     .err { color: #b91c1c; font-size: 0.9rem; }
+    pre.err-detail { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; color: #991b1b; background: #fef2f2; padding: 0.75rem; border-radius: 8px; max-height: 50vh; overflow: auto; border: 1px solid #fecaca; margin: 0.5rem 0 0; }
     pre.detail { white-space: pre-wrap; font-size: 0.8rem; background: #f5f5f4; padding: 0.75rem; border-radius: 8px; max-height: 50vh; overflow: auto; }
     .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 4px; margin-right: 0.35rem; }
     .badge-ok { background: #d1fae5; color: #065f46; }
@@ -239,8 +240,13 @@
       dEl.innerHTML = "";
       const head = document.createElement("div");
       head.innerHTML = "<p><strong>" + escHtml(d.path_with_namespace) + "</strong> PR #" + escHtml(String(d.pr_number)) + "</p>";
-      if (d.error) head.innerHTML += "<p class='err'>" + escHtml(d.error) + "</p>";
       dEl.appendChild(head);
+      if (d.error) {
+        const pre = document.createElement("pre");
+        pre.className = "err-detail";
+        pre.textContent = d.error;
+        dEl.appendChild(pre);
+      }
       const tableHost = renderGiteeCommentsTable(d, id);
       if (typeof tableHost === "string") {
         const rest = document.createElement("div");
