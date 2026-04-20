@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1.4
 # SaaS service image: no CLI scanners required
+# 不使用 # syntax=docker/dockerfile:x.x，避免构建时必须从 Docker Hub 拉取 dockerfile 前端镜像（弱网/无 buildx 时常失败）。
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -21,8 +21,8 @@ RUN set -eux; \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# 不设 PIP_NO_CACHE_DIR：配合下方 BuildKit pip 挂载，重复构建可复用本机缓存，少重新下载 wheel
 ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore \
     PIP_DEFAULT_TIMEOUT=300
@@ -34,13 +34,12 @@ ARG PIP_INDEX_URL=
 ARG PIP_TRUSTED_HOST=
 
 COPY requirements-saas.txt requirements-saas.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    set -eux; \
+RUN set -eux; \
     if [ -n "${PIP_INDEX_URL}" ] && [ -n "${PIP_TRUSTED_HOST}" ]; then \
-      pip install --root-user-action=ignore --default-timeout=300 --retries 10 \
+      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 \
         -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -r requirements-saas.txt; \
     else \
-      pip install --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements-saas.txt; \
+      pip install --no-cache-dir --root-user-action=ignore --default-timeout=300 --retries 10 -r requirements-saas.txt; \
     fi
 
 COPY app/ app/
