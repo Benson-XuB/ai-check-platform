@@ -13,6 +13,8 @@ def init_db() -> None:
 
     注意：已有 PostgreSQL 库不会自动加新列。若报 app_users.active_llm_credential_id
     不存在等错误，请在库上执行 scripts/sql/migrate_user_llm_credentials_postgres.sql。
+    若报 user_llm_credentials.custom_completion_backend 不存在，请执行
+    scripts/sql/migrate_user_llm_custom_completion_backend_postgres.sql。
     """
     engine = create_db_engine()
     if engine is None:

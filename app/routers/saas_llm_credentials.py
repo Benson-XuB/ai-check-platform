@@ -126,6 +126,7 @@ def list_credentials(request: Request):
                     "is_custom": bool(getattr(r, "is_custom", False)),
                     "custom_base_url": (r.custom_base_url or "") if getattr(r, "custom_base_url", None) else "",
                     "custom_model": (r.custom_model or "") if getattr(r, "custom_model", None) else "",
+                    "custom_completion_backend": (getattr(r, "custom_completion_backend", None) or ""),
                     "label": r.label or "",
                     "display_label": disp,
                     "provider": prov,
@@ -154,7 +155,7 @@ def upsert_credential(request: Request, body: CredentialCreate):
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         try:
-            ping_custom_endpoint(validated, cm, body.api_key.strip())
+            backend = ping_custom_endpoint(validated, cm, body.api_key.strip())
         except Exception as e:
             raise HTTPException(400, f"测试未通过: {e}") from e
         preset_row_id = f"custom-{secrets.token_hex(16)}"
@@ -168,13 +169,22 @@ def upsert_credential(request: Request, body: CredentialCreate):
                 is_custom=True,
                 custom_base_url=validated,
                 custom_model=cm.strip(),
+                custom_completion_backend=backend,
                 api_key_encrypted=enc,
                 label=body.label.strip() or None,
             )
             session.add(row)
             session.commit()
             session.refresh(row)
-            return {"ok": True, "data": {"id": row.id, "preset_id": row.preset_id, "is_custom": True}}
+            return {
+                "ok": True,
+                "data": {
+                    "id": row.id,
+                    "preset_id": row.preset_id,
+                    "is_custom": True,
+                    "custom_completion_backend": backend,
+                },
+            }
 
     preset = get_preset(p)
     if not preset:
@@ -244,11 +254,12 @@ def patch_credential(request: Request, credential_id: int, body: CredentialPatch
                 except ValueError:
                     raise HTTPException(400, "密钥解密失败") from None
                 try:
-                    ping_custom_endpoint(validated, cm, key_try)
+                    backend = ping_custom_endpoint(validated, cm, key_try)
                 except Exception as e:
                     raise HTTPException(400, f"测试未通过: {e}") from e
                 row.custom_base_url = validated
                 row.custom_model = cm
+                row.custom_completion_backend = backend
         else:
             if body.api_key is not None and body.api_key.strip():
                 row.api_key_encrypted = encrypt_api_key(body.api_key.strip())
@@ -313,7 +324,10 @@ def test_credential(request: Request, body: TestBody):
                 raise HTTPException(400, "密钥解密失败")
             if getattr(row, "is_custom", False) and row.custom_base_url and row.custom_model:
                 try:
-                    ping_custom_endpoint(row.custom_base_url, row.custom_model, key)
+                    bk = (getattr(row, "custom_completion_backend", None) or "").strip() or None
+                    ping_custom_endpoint(
+                        row.custom_base_url, row.custom_model, key, completion_backend=bk
+                    )
                 except Exception as e:
                     return {"ok": False, "error": str(e)}
                 return {"ok": True}

@@ -1,4 +1,4 @@
-"""custom_endpoint_completion 与鉴权类错误判定（无网络：mock 下游调用）。"""
+"""custom_endpoint_completion、probe_custom_completion_backend（无网络：mock）。"""
 
 from types import SimpleNamespace
 
@@ -8,6 +8,7 @@ from app.services.llm_litellm import (
     _custom_auth_like_error,
     _exception_or_cause_auth_like,
     custom_endpoint_completion,
+    probe_custom_completion_backend,
 )
 
 
@@ -48,112 +49,124 @@ def _fake_moonshot_response(text: str):
     return SimpleNamespace(choices=[ch])
 
 
-def test_custom_endpoint_openai_only_non_kimi(monkeypatch):
+def test_custom_endpoint_litellm_backend(monkeypatch):
     calls: list[tuple] = []
 
-    def fake_moonshot(base, api_key, api_model, prompt, **kw):
-        calls.append((base, api_model))
-        return _fake_moonshot_response("ok-openai")
+    def fake_litellm(model, api_key, prompt, **kw):
+        calls.append((model, kw.get("base_url")))
+        return "ok-litellm"
 
-    monkeypatch.setattr(
-        "app.services.llm_litellm._moonshot_chat_single",
-        fake_moonshot,
-    )
+    monkeypatch.setattr("app.services.llm_litellm.litellm_completion", fake_litellm)
+
     out = custom_endpoint_completion(
         "sk-test",
-        "https://api.openai.com",
-        "gpt-4o-mini",
+        "https://api.example.com",
+        "my-model",
         "hi",
         max_tokens=10,
         temperature=0.1,
         timeout=5.0,
+        completion_backend="litellm",
     )
-    assert out == "ok-openai"
+    assert out == "ok-litellm"
     assert len(calls) == 1
-    assert calls[0][0] == "https://api.openai.com/v1"
-    assert calls[0][1] == "gpt-4o-mini"
+    assert calls[0][0] == "openai/my-model"
+    assert calls[0][1] == "https://api.example.com/v1"
 
 
-def test_custom_endpoint_kimi_coding_anthropic_success(monkeypatch):
-    def fake_anthropic(key, model, prompt, **kw):
+def test_custom_endpoint_anthropic_backend(monkeypatch):
+    seen: list[str] = []
+
+    def fake_anthropic(key, base, model, prompt, **kw):
+        seen.append((base, model))
         return "from-anthropic"
 
-    monkeypatch.setattr(
-        "app.services.llm_litellm._kimi_code_anthropic_chat",
-        fake_anthropic,
-    )
+    monkeypatch.setattr("app.services.llm_litellm._anthropic_messages_chat", fake_anthropic)
 
     def boom(*a, **k):
-        raise AssertionError("should not call OpenAI when Anthropic succeeds")
+        raise AssertionError("should not call litellm when backend=anthropic")
 
-    monkeypatch.setattr("app.services.llm_litellm._moonshot_chat_single", boom)
+    monkeypatch.setattr("app.services.llm_litellm.litellm_completion", boom)
 
     out = custom_endpoint_completion(
         "sk-test",
         "https://api.kimi.com/coding",
-        "kimi-for-coding",
+        "kimi-ai-coding",
         "ping",
         max_tokens=10,
         temperature=0.1,
         timeout=5.0,
+        completion_backend="anthropic",
     )
     assert out == "from-anthropic"
+    assert seen == [("https://api.kimi.com/coding", "kimi-ai-coding")]
 
 
-def test_custom_endpoint_kimi_coding_falls_back_on_non_auth(monkeypatch):
+def test_custom_endpoint_anthropic_backend_raises(monkeypatch):
     def fake_anthropic(*a, **k):
         raise RuntimeError("upstream timeout")
 
-    monkeypatch.setattr(
-        "app.services.llm_litellm._kimi_code_anthropic_chat",
-        fake_anthropic,
-    )
-
-    def fake_moonshot(base, api_key, api_model, prompt, **kw):
-        assert "/v1" in base
-        return _fake_moonshot_response("from-openai")
-
-    monkeypatch.setattr(
-        "app.services.llm_litellm._moonshot_chat_single",
-        fake_moonshot,
-    )
-
-    out = custom_endpoint_completion(
-        "sk-test",
-        "https://api.kimi.com/coding",
-        "kimi-for-coding",
-        "ping",
-        max_tokens=10,
-        temperature=0.1,
-        timeout=5.0,
-    )
-    assert out == "from-openai"
-
-
-def test_custom_endpoint_kimi_coding_no_fallback_on_401(monkeypatch):
-    def fake_anthropic(*a, **k):
-        raise _Exc401()
-
-    monkeypatch.setattr(
-        "app.services.llm_litellm._kimi_code_anthropic_chat",
-        fake_anthropic,
-    )
+    monkeypatch.setattr("app.services.llm_litellm._anthropic_messages_chat", fake_anthropic)
 
     def boom(*a, **k):
-        raise AssertionError("OpenAI should not run after auth-like failure")
+        raise AssertionError("backend fixed anthropic should not call litellm")
 
-    monkeypatch.setattr("app.services.llm_litellm._moonshot_chat_single", boom)
+    monkeypatch.setattr("app.services.llm_litellm.litellm_completion", boom)
 
     with pytest.raises(RuntimeError, match="自定义端点调用失败"):
         custom_endpoint_completion(
-            "sk-bad",
+            "sk-test",
             "https://api.kimi.com/coding",
-            "kimi-for-coding",
+            "kimi-ai-coding",
             "ping",
             max_tokens=10,
             temperature=0.1,
             timeout=5.0,
+            completion_backend="anthropic",
         )
+
+
+def test_probe_prefers_anthropic(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_litellm._anthropic_messages_chat",
+        lambda *a, **k: "ok",
+    )
+
+    def boom(*a, **k):
+        raise AssertionError("probe should not call litellm when anthropic succeeds")
+
+    monkeypatch.setattr("app.services.llm_litellm.litellm_completion", boom)
+
+    b = probe_custom_completion_backend("sk", "https://api.kimi.com/coding", "m", timeout=5.0)
+    assert b == "anthropic"
+
+
+def test_probe_falls_back_litellm(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_litellm._anthropic_messages_chat",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no anthropic")),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_litellm.litellm_completion",
+        lambda *a, **k: "ok",
+    )
+
+    b = probe_custom_completion_backend("sk", "https://api.example.com", "m", timeout=5.0)
+    assert b == "litellm"
+
+
+def test_probe_both_fail(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.llm_litellm._anthropic_messages_chat",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("a")),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_litellm.litellm_completion",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("b")),
+    )
+
+    with pytest.raises(RuntimeError, match="自定义端点不可用"):
+        probe_custom_completion_backend("sk", "https://x.com", "m", timeout=5.0)
 
 
 def test_custom_endpoint_empty_model():
@@ -166,4 +179,5 @@ def test_custom_endpoint_empty_model():
             max_tokens=1,
             temperature=0.0,
             timeout=1.0,
+            completion_backend="litellm",
         )

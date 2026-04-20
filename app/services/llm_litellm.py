@@ -4,6 +4,7 @@ LLM 单次补全：
 - Kimi Code（kimi-for-coding）：Anthropic Messages API，base https://api.kimi.com/coding（与 Claude Code 文档一致）
 - 通义 DashScope：LiteLLM dashscope/
 - litellm：含 OpenAI、Gemini、Anthropic/Claude 等；Gemini 仅 Google 协议，无 Anthropic 线
+- 用户自定义 Base（SaaS）：保存前探测 anthropic | litellm；审查时按库字段选用，LiteLLM 分支走 OpenAI 兼容 HTTP（不经 openai SDK）
 
 模型 ID 需与 LiteLLM 文档一致：https://docs.litellm.ai/docs/providers
 """
@@ -55,8 +56,9 @@ def _anthropic_message_blocks_to_text(msg: Any) -> str:
     return "".join(parts).strip()
 
 
-def _kimi_code_anthropic_chat(
+def _anthropic_messages_chat(
     api_key: str,
+    anthropic_base_url: str,
     api_model: str,
     prompt: str,
     *,
@@ -64,17 +66,19 @@ def _kimi_code_anthropic_chat(
     temperature: float,
     timeout: float,
 ) -> str:
-    """Kimi Code：Anthropic 兼容网关（官方与 Claude Code 同路径）。"""
+    """任意 Anthropic Messages 兼容网关（含 Kimi Code）。"""
     import anthropic
 
+    base = (anthropic_base_url or "").strip().rstrip("/")
     kwargs_client: dict[str, Any] = {
         "api_key": (api_key or "").strip(),
-        "base_url": _KIMI_CODING_ANTHROPIC_BASE.rstrip("/"),
+        "base_url": base,
         "timeout": timeout,
     }
-    ua = _kimi_coding_user_agent()
-    if ua:
-        kwargs_client["default_headers"] = {"User-Agent": ua}
+    if _is_kimi_coding_base(base):
+        ua = _kimi_coding_user_agent()
+        if ua:
+            kwargs_client["default_headers"] = {"User-Agent": ua}
     client = anthropic.Anthropic(**kwargs_client)
     mt = max_tokens if max_tokens is not None else 4096
     try:
@@ -85,9 +89,30 @@ def _kimi_code_anthropic_chat(
             temperature=temperature,
         )
     except Exception as e:
-        logger.warning("kimi code anthropic failed model=%s: %s", api_model, e)
-        raise RuntimeError(f"Kimi Code (Anthropic) 调用失败: {e}") from e
+        logger.warning("anthropic messages failed base=%s model=%s: %s", base, api_model, e)
+        raise RuntimeError(f"Anthropic API 调用失败: {e}") from e
     return _anthropic_message_blocks_to_text(msg) or ""
+
+
+def _kimi_code_anthropic_chat(
+    api_key: str,
+    api_model: str,
+    prompt: str,
+    *,
+    max_tokens: Optional[int],
+    temperature: float,
+    timeout: float,
+) -> str:
+    """Kimi Code：Anthropic 兼容网关（官方与 Claude Code 同路径）。"""
+    return _anthropic_messages_chat(
+        api_key,
+        _KIMI_CODING_ANTHROPIC_BASE,
+        api_model,
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+    )
 
 
 def _is_kimi_coding_base(base: str) -> bool:
@@ -313,6 +338,65 @@ def _exception_or_cause_auth_like(exc: BaseException) -> bool:
     return False
 
 
+def _custom_litellm_model_id(api_model: str) -> str:
+    """自定义端点走 LiteLLM OpenAI 兼容时：openai/<deployment>；已带 openai/、azure/ 前缀则原样。"""
+    m = (api_model or "").strip()
+    if not m:
+        raise ValueError("empty api_model")
+    if m.startswith("openai/") or m.startswith("azure/"):
+        return m
+    return f"openai/{m}"
+
+
+def probe_custom_completion_backend(
+    api_key: str,
+    base_url_validated: str,
+    api_model: str,
+    *,
+    timeout: float = 45.0,
+) -> str:
+    """保存自定义凭证前：先 Anthropic（用户 base），再 LiteLLM OpenAI 兼容；返回 anthropic | litellm。"""
+    from app.services.llm_custom_url import normalize_openai_compatible_base
+
+    m = (api_model or "").strip()
+    if not m:
+        raise ValueError("empty api_model")
+    base = (base_url_validated or "").strip().rstrip("/")
+    ping = "Reply with exactly: OK"
+    anthropic_err: Optional[BaseException] = None
+    try:
+        _anthropic_messages_chat(
+            api_key,
+            base,
+            m,
+            ping,
+            max_tokens=16,
+            temperature=0.0,
+            timeout=timeout,
+        )
+        return "anthropic"
+    except Exception as e:
+        anthropic_err = e
+        logger.info("custom credential anthropic probe failed, trying litellm: %s", e)
+    try:
+        ob = normalize_openai_compatible_base(base_url_validated)
+        litellm_completion(
+            _custom_litellm_model_id(m),
+            api_key,
+            ping,
+            max_tokens=16,
+            temperature=0.0,
+            timeout=timeout,
+            base_url=ob,
+        )
+        return "litellm"
+    except Exception as e2:
+        a = str(anthropic_err) if anthropic_err else ""
+        raise RuntimeError(
+            f"自定义端点不可用：Anthropic 与 LiteLLM 均失败。Anthropic: {a}; LiteLLM: {e2}"
+        ) from e2
+
+
 def custom_endpoint_completion(
     api_key: str,
     base_url_validated: str,
@@ -322,66 +406,59 @@ def custom_endpoint_completion(
     max_tokens: Optional[int],
     temperature: float,
     timeout: float,
+    completion_backend: Optional[str] = None,
 ) -> str:
     """
     用户自定义 HTTPS Base + 模型名。
-    Kimi Code（api.kimi.com/.../coding）且模型为 kimi-for-coding：先 Anthropic，非鉴权失败再试 OpenAI /v1。
-    其它：仅 OpenAI 兼容 chat.completions。
+    completion_backend 为 anthropic | litellm（来自库内探测结果）；未传时当次请求内先探测（多一次小请求，旧凭证兼容）。
+    不再使用 OpenAI Python SDK；LiteLLM 分支走 OpenAI 兼容 HTTP。
     """
-    from app.services.llm_custom_url import (
-        is_kimi_coding_url,
-        normalize_openai_compatible_base,
-    )
+    from app.services.llm_custom_url import normalize_openai_compatible_base
 
     m = (api_model or "").strip()
     if not m:
         raise ValueError("empty api_model")
     base = (base_url_validated or "").strip().rstrip("/")
 
-    if is_kimi_coding_url(base) and m == "kimi-for-coding":
+    bk_in = (completion_backend or "").strip().lower() or None
+    backend = bk_in if bk_in in ("anthropic", "litellm") else None
+    if backend is None:
+        backend = probe_custom_completion_backend(
+            api_key, base_url_validated, m, timeout=min(45.0, float(timeout))
+        )
+
+    if backend == "anthropic":
         try:
-            return _kimi_code_anthropic_chat(
-                api_key, m, prompt, max_tokens=max_tokens, temperature=temperature, timeout=timeout
+            return _anthropic_messages_chat(
+                api_key,
+                base,
+                m,
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
             )
         except Exception as e:
-            if _exception_or_cause_auth_like(e):
-                logger.warning("kimi code anthropic auth-like error, not falling back: %s", e)
-                raise RuntimeError(f"自定义端点调用失败: {e}") from e
-            logger.info("kimi code anthropic failed, trying OpenAI compatible: %s", e)
-            ob = normalize_openai_compatible_base(base)
-            try:
-                resp = _moonshot_chat_single(
-                    ob,
-                    api_key,
-                    m,
-                    prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    timeout=timeout,
-                )
-            except Exception as e2:
-                raise RuntimeError(f"自定义端点调用失败（Anthropic 与 OpenAI 均未成功）: {e2}") from e2
-            if not resp.choices:
-                return ""
-            return _moonshot_assistant_text(resp.choices[0].message)
+            logger.warning("custom anthropic failed: %s", e)
+            raise RuntimeError(f"自定义端点调用失败: {e}") from e
 
-    ob = normalize_openai_compatible_base(base)
-    try:
-        resp = _moonshot_chat_single(
-            ob,
-            api_key,
-            m,
-            prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        )
-    except Exception as e:
-        logger.warning("custom openai-compatible failed base=%s model=%s: %s", ob, m, e)
-        raise RuntimeError(f"自定义端点调用失败: {e}") from e
-    if not resp.choices:
-        return ""
-    return _moonshot_assistant_text(resp.choices[0].message)
+    if backend == "litellm":
+        ob = normalize_openai_compatible_base(base_url_validated)
+        try:
+            return litellm_completion(
+                _custom_litellm_model_id(m),
+                api_key,
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
+                base_url=ob,
+            )
+        except Exception as e:
+            logger.warning("custom litellm failed base=%s model=%s: %s", ob, m, e)
+            raise RuntimeError(f"自定义端点调用失败: {e}") from e
+
+    raise ValueError(f"unsupported custom completion_backend: {backend}")
 
 
 def completion_text(

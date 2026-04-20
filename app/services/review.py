@@ -1016,8 +1016,10 @@ def call_custom_endpoint(
     pr_title: str = "",
     pr_body: str = "",
     file_contexts: Optional[Dict[str, str]] = None,
+    *,
+    completion_backend: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """用户自定义 Base URL + 模型名。"""
+    """用户自定义 Base URL + 模型名；completion_backend 为 anthropic | litellm（来自凭证探测）。"""
     from app.services.llm_litellm import custom_endpoint_completion
 
     prompt = _build_prompt(diff, pr_title, pr_body, file_contexts or {})
@@ -1029,6 +1031,7 @@ def call_custom_endpoint(
         max_tokens=None,
         temperature=0.3,
         timeout=120.0,
+        completion_backend=completion_backend,
     )
     return _parse_review_output(content, diff)
 

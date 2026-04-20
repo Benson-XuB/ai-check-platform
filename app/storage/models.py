@@ -94,6 +94,8 @@ class UserLlmCredential(Base):
     is_custom: Mapped[bool] = mapped_column(default=False, nullable=False)
     custom_base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     custom_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    # is_custom 时：保存凭证前探测 — anthropic（Messages）或 litellm（OpenAI 兼容，经 LiteLLM）
+    custom_completion_backend: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

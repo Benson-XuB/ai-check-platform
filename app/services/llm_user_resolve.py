@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 Source = Literal["user", "platform"]
 
 
+def _normalize_custom_completion_backend(raw: Optional[str]) -> Optional[str]:
+    s = (raw or "").strip().lower()
+    if s in ("anthropic", "litellm"):
+        return s
+    return None
+
+
 @dataclass
 class ResolvedLlm:
     provider: str
@@ -28,6 +35,8 @@ class ResolvedLlm:
     source: Source
     # provider=custom 时已校验的 Base URL；预设凭证时为 None
     custom_base_url: Optional[str] = None
+    # provider=custom：anthropic | litellm（保存凭证时探测写入）；未迁移的旧数据可能为 None
+    custom_completion_backend: Optional[str] = None
 
 
 def resolve_llm_for_review(app_user_id: int) -> ResolvedLlm:
@@ -61,6 +70,9 @@ def resolve_llm_for_review(app_user_id: int) -> ResolvedLlm:
                                         cred.custom_model.strip(),
                                         "user",
                                         custom_base_url=cred.custom_base_url.strip(),
+                                        custom_completion_backend=_normalize_custom_completion_backend(
+                                            getattr(cred, "custom_completion_backend", None)
+                                        ),
                                     )
                                 logger.warning("empty user llm key user=%s cred=%s", app_user_id, cred.id)
                         else:

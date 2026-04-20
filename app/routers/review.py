@@ -23,6 +23,8 @@ class ReviewRequest(BaseModel):
     # 非空：dashscope→单模型通义；kimi→Moonshot；litellm→api_model 为 LiteLLM 完整 model 串；custom→配合 llm_custom_base_url
     llm_model: Optional[str] = None
     llm_custom_base_url: Optional[str] = None
+    # custom：anthropic | litellm，与 user_llm_credentials.custom_completion_backend 一致；缺省时服务端会探测
+    llm_custom_completion_backend: Optional[str] = None
     use_mock: bool = False
     use_multipass: bool = False  # 三阶段审查：Pass1 预筛选 + Pass2 主审查 + Pass3 深化 Critical（仅 DashScope）
     use_semantic_context: bool = False  # 用 diff 向量检索 Top-K 相关代码片段并入上下文（仅 DashScope）
@@ -87,6 +89,7 @@ def run_review_core(req: ReviewRequest) -> dict:
                 pr_title=req.pr_title,
                 pr_body=req.pr_body,
                 file_contexts=file_contexts,
+                completion_backend=(req.llm_custom_completion_backend or "").strip() or None,
             )
         elif req.llm_provider == "kimi":
             comments = review_svc.call_kimi(
