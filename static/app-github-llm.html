@@ -33,7 +33,7 @@
 </head>
 <body>
   <h1>审查用模型与 API Key</h1>
-  <p class="sub">可选<strong>预设模型</strong>，或填写<strong>自定义 HTTPS Base URL + 模型名</strong>（保存前会测试）。设为默认后 PR 审查优先使用。说明见 <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener">LiteLLM Providers</a>。</p>
+  <p class="sub">填写<strong>自定义 HTTPS Base URL + 模型名</strong>与 API Key（保存前可测试）。设为默认后 PR 审查优先使用。</p>
   <p class="sub"><a href="/app">←返回 GitHub 概览</a> · <a href="/">首页</a> · <a href="/app-gitee">Gitee 控制台</a></p>
 
   <div id="gate" class="card"></div>
@@ -51,34 +51,12 @@
       const box = document.getElementById("llmBody");
       box.style.display = "block";
       try {
-        const pr = await j("/api/saas/llm/presets");
         const cr = await j("/api/saas/llm/credentials");
-        if (!pr.ok) {
-          box.innerHTML = "<span class='err'>无法加载预设: " + (pr.detail || pr.error || "") + "</span>";
-          return;
-        }
         if (!cr.ok) {
           box.innerHTML = "<span class='err'>无法加载凭证: " + (cr.detail || cr.error || "") + "</span>";
           return;
         }
-        const presets = pr.data || [];
         const items = (cr.data && cr.data.items) || [];
-        const esc = (s) => String(s == null ? "" : s)
-          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-        const byGroup = {};
-        presets.forEach((p) => {
-          const g = p.group || "其它";
-          (byGroup[g] = byGroup[g] || []).push(p);
-        });
-        const gkeys = Object.keys(byGroup).sort((a, b) => a.localeCompare(b, "zh-CN"));
-        let opts = "";
-        gkeys.forEach((g) => {
-          opts += "<optgroup label=\"" + esc(g) + "\">";
-          byGroup[g].forEach((p) => {
-            opts += "<option value=\"" + esc(p.id) + "\">" + esc(p.label) + "</option>";
-          });
-          opts += "</optgroup>";
-        });
         let rows = items.map((it) => {
           const act = it.is_active ? " <span class='badge badge-ok'>默认</span>" : "";
           const btns = "<button type='button' class='secondary' data-act='use' data-id=\"" + it.id + "\">设为默认</button> " +
@@ -89,8 +67,6 @@
         }).join("");
         box.className = "card";
         box.innerHTML =
-          "<div class='llm-row'><label>预设模型<br><select id='llmPreset' class='llm-in'>" + opts + "</select></label></div>" +
-          "<p class='meta' style='margin:0.35rem 0;'>— 或自定义端点（与预设二选一填写）—</p>" +
           "<div class='llm-row'><label>自定义 Base URL（HTTPS）<br><input id='customBase' class='llm-in' type='url' placeholder='https://api.example.com/v1 或根路径'></label></div>" +
           "<div class='llm-row'><label>自定义模型名<br><input id='customModel' class='llm-in' type='text' placeholder='如 kimi-for-coding'></label></div>" +
           "<div class='llm-row'><label>备注（可选）<br><input id='llmLabel' class='llm-in' type='text' placeholder='例如：公司账号'></label></div>" +
@@ -105,18 +81,19 @@
           el.className = err ? "err" : "meta";
         };
         document.getElementById("llmTestNew").onclick = async () => {
-          const preset_id = document.getElementById("llmPreset").value;
           const api_key = document.getElementById("llmKey").value;
           const custom_base_url = (document.getElementById("customBase") || {}).value || "";
           const custom_model = (document.getElementById("customModel") || {}).value || "";
-          msg("测试中…");
-          const body = { api_key };
-          if (custom_base_url.trim() && custom_model.trim()) {
-            body.custom_base_url = custom_base_url.trim();
-            body.custom_model = custom_model.trim();
-          } else {
-            body.preset_id = preset_id;
+          if (!custom_base_url.trim() || !custom_model.trim() || !api_key.trim()) {
+            msg("请填写 Base URL、模型名与 API Key", true);
+            return;
           }
+          msg("测试中…");
+          const body = {
+            api_key,
+            custom_base_url: custom_base_url.trim(),
+            custom_model: custom_model.trim(),
+          };
           const r = await j("/api/saas/llm/credentials/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -125,28 +102,25 @@
           msg(r.ok ? "测试通过" : ("失败: " + (r.error || r.detail || "")), !r.ok);
         };
         document.getElementById("llmSave").onclick = async () => {
-          const preset_id = document.getElementById("llmPreset").value;
           const api_key = document.getElementById("llmKey").value;
           const label = document.getElementById("llmLabel").value;
           const custom_base_url = (document.getElementById("customBase") || {}).value || "";
           const custom_model = (document.getElementById("customModel") || {}).value || "";
+          if (!custom_base_url.trim() || !custom_model.trim()) {
+            msg("请填写 Base URL 与模型名", true);
+            return;
+          }
           if (!api_key.trim()) {
             msg("请填写 API Key", true);
             return;
           }
-          const useCustom = custom_base_url.trim() && custom_model.trim();
-          if (!useCustom && !preset_id) {
-            msg("请选择预设，或填写自定义 Base URL 与模型名", true);
-            return;
-          }
           msg("保存中…");
-          const payload = { api_key, label };
-          if (useCustom) {
-            payload.custom_base_url = custom_base_url.trim();
-            payload.custom_model = custom_model.trim();
-          } else {
-            payload.preset_id = preset_id;
-          }
+          const payload = {
+            api_key,
+            label,
+            custom_base_url: custom_base_url.trim(),
+            custom_model: custom_model.trim(),
+          };
           const r = await j("/api/saas/llm/credentials", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
